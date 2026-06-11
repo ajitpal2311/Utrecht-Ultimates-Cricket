@@ -1,0 +1,6 @@
+{
+  "name": "Utrecht Ultimates Cricket",
+  "description": "A sunlight-friendly, high-contrast cricket scoring app for Utrecht Ultimates with real-time match sharing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

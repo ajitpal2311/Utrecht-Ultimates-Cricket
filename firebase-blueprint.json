@@ -1,0 +1,89 @@
+{
+  "entities": {
+    "CricketMatch": {
+      "title": "CricketMatch",
+      "description": "A match containing complete details and inning scorecards",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the match"
+        },
+        "matchName": {
+          "type": "string",
+          "description": "Name of the match"
+        },
+        "teamAName": {
+          "type": "string",
+          "description": "Name of Team A"
+        },
+        "teamBName": {
+          "type": "string",
+          "description": "Name of Team B"
+        },
+        "overs": {
+          "type": "number",
+          "description": "Total number of overs"
+        },
+        "playersPerTeam": {
+          "type": "number",
+          "description": "Number of players per team"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["created", "toss", "scoring", "completed"],
+          "description": "Current status of the match"
+        },
+        "tossWinner": {
+          "type": "string",
+          "enum": ["A", "B", "null"],
+          "description": "Which team won the toss"
+        },
+        "tossDecision": {
+          "type": "string",
+          "enum": ["bat", "bowl", "null"],
+          "description": "Toss decision (batting or bowling first)"
+        },
+        "currentInningsIndex": {
+          "type": "number",
+          "description": "Active innings index (1 or 2)"
+        },
+        "winner": {
+          "type": "string",
+          "enum": ["A", "B", "tie", "null"],
+          "description": "Winning team"
+        },
+        "marginOfVictory": {
+          "type": "string",
+          "description": "Margin of victory description"
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Last updated timestamp"
+        }
+      },
+      "required": [
+        "id",
+        "matchName",
+        "teamAName",
+        "teamBName",
+        "overs",
+        "playersPerTeam",
+        "status",
+        "currentInningsIndex",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/matches/{matchId}": {
+      "schema": "CricketMatch",
+      "description": "Full match telemetry and scorecards stored for real-time viewing and scoring."
+    }
+  }
+}
