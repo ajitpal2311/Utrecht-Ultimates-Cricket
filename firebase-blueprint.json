@@ -119,6 +119,25 @@
         "players",
         "updatedAt"
       ]
+    },
+    "Viewer": {
+      "title": "Viewer",
+      "description": "An active viewer session tracking live application usage",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The session ID or guest ID of the viewer"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Latest heartbeat time of the active session"
+        }
+      },
+      "required": [
+        "id",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -129,6 +148,10 @@
     "/attendance/{dateId}": {
       "schema": "DailyAttendance",
       "description": "Today's players attendance list and current configurations of Team A/B rosters."
+    },
+    "/viewers/{viewerId}": {
+      "schema": "Viewer",
+      "description": "Active users currently maintaining open sessions in the application."
     }
   }
 }

@@ -80,5 +80,14 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isValidId(dateId) && isValidAttendance(incoming());
     }
+
+    // Viewer session rules (for active audience tracking)
+    match /viewers/{viewerId} {
+      allow read: if true;
+      allow write: if isValidId(viewerId)
+        && incoming().get('id', '') is string
+        && incoming().get('id', '').size() <= 128
+        && incoming().get('updatedAt', 0) is int;
+    }
   }
 }

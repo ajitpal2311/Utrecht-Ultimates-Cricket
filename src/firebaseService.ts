@@ -10,7 +10,7 @@ function getLocalMatches(): CricketMatch[] {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
     return raw ? JSON.parse(raw) : [];
   } catch (err) {
-    console.error("Failed to parse local matches:", err);
+    console.warn("Failed to parse local matches:", err);
     return [];
   }
 }
@@ -20,7 +20,7 @@ function saveLocalMatches(matches: CricketMatch[]) {
   try {
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(matches));
   } catch (err) {
-    console.error("Failed to save local matches:", err);
+    console.warn("Failed to save local matches:", err);
   }
 }
 
@@ -120,7 +120,7 @@ export async function fetchAllMatches(): Promise<CricketMatch[]> {
       }
       return all.sort((a, b) => b.updatedAt - a.updatedAt);
     } catch (error) {
-      console.error("Failed to fetch matches from Firestore, falling back to LocalStorage:", error);
+      console.warn("Failed to fetch matches from Firestore, falling back to LocalStorage:", error);
       return localMatches.sort((a, b) => b.updatedAt - a.updatedAt);
     }
   }
@@ -161,7 +161,7 @@ export function listenToMatch(
         if (found) onUpdate(found);
       }
     }, (error) => {
-      console.error("Firestore onSnapshot error:", error);
+      console.warn("Firestore onSnapshot error:", error);
       // Fallback
       const locals = getLocalMatches();
       const found = locals.find(m => m.id === matchId);
@@ -213,7 +213,7 @@ export async function fetchAttendance(dateId: string): Promise<DailyAttendance |
         return remoteData;
       }
     } catch (error) {
-      console.error("Failed to fetch attendance from Firestore, checking local cache", error);
+      console.warn("Failed to fetch attendance from Firestore, checking local cache", error);
     }
   }
 
@@ -222,7 +222,7 @@ export async function fetchAttendance(dateId: string): Promise<DailyAttendance |
     const raw = localStorage.getItem(localKey);
     return raw ? JSON.parse(raw) : null;
   } catch (err) {
-    console.error("Failed to read local attendance", err);
+    console.warn("Failed to read local attendance", err);
     return null;
   }
 }
@@ -235,7 +235,7 @@ export async function saveAttendance(attendance: DailyAttendance): Promise<void>
   try {
     localStorage.setItem(localKey, JSON.stringify(attendance));
   } catch (err) {
-    console.error("Failed to write local attendance", err);
+    console.warn("Failed to write local attendance", err);
   }
 
   // Write to Firestore if Firebase is active
@@ -250,4 +250,55 @@ export async function saveAttendance(attendance: DailyAttendance): Promise<void>
     }
   }
 }
+
+// 7. Register viewer session heartbeat
+export async function registerViewerHeartbeat(sessionId: string): Promise<void> {
+  if (isFirebaseEnabled && db) {
+    try {
+      await setDoc(doc(db, 'viewers', sessionId), {
+        id: sessionId,
+        updatedAt: Date.now()
+      });
+    } catch (error) {
+      console.warn("Failed to register viewer heartbeat:", error);
+    }
+  }
+}
+
+// 8. Listen to active viewers count
+export function listenActiveViewers(
+  onUpdate: (count: number) => void
+): () => void {
+  if (!isFirebaseEnabled || !db) {
+    // offline visual dummy simulation
+    onUpdate(1);
+    return () => {};
+  }
+
+  try {
+    const unsub = onSnapshot(collection(db, 'viewers'), (snapshot) => {
+      const activeThreshold = Date.now() - 30000; // 30 seconds threshold
+      let activeCount = 0;
+      
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data && data.updatedAt && typeof data.updatedAt === 'number' && data.updatedAt > activeThreshold) {
+          activeCount++;
+        }
+      });
+      
+      onUpdate(activeCount > 0 ? activeCount : 1);
+    }, (error) => {
+      console.warn("Error listening to active viewers:", error);
+      onUpdate(1);
+    });
+
+    return unsub;
+  } catch (err) {
+    console.warn("Could not attach viewers listener:", err);
+    onUpdate(1);
+    return () => {};
+  }
+}
+
 

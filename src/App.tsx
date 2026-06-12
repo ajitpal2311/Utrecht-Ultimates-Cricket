@@ -33,7 +33,7 @@ import {
   ballsToOvers, 
   calculateRunRate 
 } from './matchEngine';
-import { saveMatch, fetchAllMatches, listenToMatch, deleteMatch, saveAttendance, fetchAttendance } from './firebaseService';
+import { saveMatch, fetchAllMatches, listenToMatch, deleteMatch, saveAttendance, fetchAttendance, registerViewerHeartbeat, listenActiveViewers } from './firebaseService';
 import { isFirebaseEnabled } from './firebase';
 
 export default function App() {
@@ -97,6 +97,13 @@ export default function App() {
   const [themeMode, setThemeMode] = useState<'sunlight' | 'night'>('sunlight');
   const [hapticFeedback, setHapticFeedback] = useState<boolean>(true);
 
+  // Internet connectivity state tracking
+  const [isOnline, setIsOnline] = useState<boolean>(() => typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  // Tab-specific viewer session tracking
+  const [sessionId] = useState(() => 'sess-' + Math.random().toString(36).substring(2, 11));
+  const [viewerCount, setViewerCount] = useState<number>(1);
+
   // Reusable custom confirm modal state
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -143,7 +150,7 @@ export default function App() {
   };
 
   // Today's Attendance State
-  const [attendancePlayers, setAttendancePlayers] = useState<string[]>(['Andy', 'Ajit', 'Arindam', 'Bidhan', 'Sumit']);
+  const [attendancePlayers, setAttendancePlayers] = useState<string[]>([]);
   const [attendanceInput, setAttendanceInput] = useState<string>('');
   const [attendanceTeamA, setAttendanceTeamA] = useState<string[]>([]);
   const [attendanceTeamB, setAttendanceTeamB] = useState<string[]>([]);
@@ -191,6 +198,47 @@ export default function App() {
     }
   }, [currentView, userRole]);
 
+  // Track internet connectivity
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      triggerToast("💚 Back online! Operations will sync automatically.");
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      triggerToast("⚠️ Operating offline. Changes saved locally and will sync once connected.");
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // Active Viewer Counter Heartbeat & Streaming
+  useEffect(() => {
+    // 1. Send initial tab heartbeat
+    registerViewerHeartbeat(sessionId);
+
+    // 2. Keep posting heartbeat every 15 seconds to stay alive
+    const heartbeatInterval = setInterval(() => {
+      registerViewerHeartbeat(sessionId);
+    }, 15000);
+
+    // 3. Subscribe to overall active viewer pool count
+    const unsubViewers = listenActiveViewers((count) => {
+      setViewerCount(count);
+    });
+
+    return () => {
+      clearInterval(heartbeatInterval);
+      unsubViewers();
+    };
+  }, [sessionId]);
+
   // Read Deep-Link/Spectator parameters on Mount
   useEffect(() => {
     const handleUrlLoading = async () => {
@@ -235,17 +283,9 @@ export default function App() {
           setAttendanceTeamA(todayAtt.teamA || []);
           setAttendanceTeamB(todayAtt.teamB || []);
         } else {
-          // Initialize with default demo list and save
-          const defaults = ['Andy', 'Ajit', 'Arindam', 'Bidhan', 'Sumit'];
-          setAttendancePlayers(defaults);
-          const prefill = {
-            id: todayId,
-            players: defaults,
-            teamA: [],
-            teamB: [],
-            updatedAt: Date.now()
-          };
-          await saveAttendance(prefill);
+          setAttendancePlayers([]);
+          setAttendanceTeamA([]);
+          setAttendanceTeamB([]);
         }
       } catch (e) {
         console.warn("Could not load daily attendance:", e);
@@ -361,6 +401,11 @@ export default function App() {
       triggerToast("🔐 Operation restricted to scorers only");
       return;
     }
+    if (attendancePlayers.length < 4) {
+      triggerHapticFeedback();
+      triggerToast("⚠️ Minimum 4 players required in today's attendance to start a match!");
+      return;
+    }
     triggerHapticFeedback();
 
     let initialASquad: string[] = [];
@@ -369,7 +414,7 @@ export default function App() {
     let defaultTeamBName = 'Team B';
 
     // Use Today's Attendance as the player pool
-    const pool = attendancePlayers.length > 0 ? [...attendancePlayers] : ['Andy', 'Ajit', 'Arindam', 'Bidhan', 'Sumit'];
+    const pool = [...attendancePlayers];
 
     // If no teams exist yet today, automatically assign players randomly
     if (attendanceTeamA.length === 0 && attendanceTeamB.length === 0) {
@@ -1152,7 +1197,7 @@ export default function App() {
           await deleteMatch(matchId);
           triggerToast("🗑️ Match deleted successfully!");
         } catch (error) {
-          console.error("Match deletion failed:", error);
+          console.warn("Match deletion failed:", error);
           triggerToast("⚠️ Deletion failed or you are not the creator.");
         }
         loadAllMatches();
@@ -1513,6 +1558,43 @@ export default function App() {
             className="space-y-6"
             id="home-screen"
           >
+
+            {/* Live Viewers Indicator */}
+            <div className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between font-display text-sm ${
+              isSunlight 
+                ? 'bg-sky-50 border-sky-200 text-sky-950 shadow-sm' 
+                : 'bg-slate-900 border-slate-800 text-slate-100 shadow-md'
+            }`} id="live-viewers-indicator">
+              <div className="flex items-center gap-2.5">
+                <span className="relative flex h-3.5 w-3.5">
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                    isOnline ? 'bg-emerald-400' : 'bg-amber-400'
+                  }`}></span>
+                  <span className={`relative inline-flex rounded-full h-3.5 w-3.5 ${
+                    isOnline ? 'bg-emerald-500' : 'bg-amber-500'
+                  }`}></span>
+                </span>
+                <span className="font-semibold select-none flex items-center gap-1">
+                  <span>Live App Viewers</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap w-full sm:w-auto justify-between sm:justify-end">
+                {/* Connection Status Badge */}
+                <span className={`text-[10px] px-2 py-0.5 rounded-md font-bold uppercase tracking-wider flex items-center gap-1 border select-none ${
+                  isOnline 
+                    ? (isSunlight ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-emerald-950/40 border-emerald-800 text-emerald-400')
+                    : (isSunlight ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-amber-950/40 border-amber-800 text-amber-400')
+                }`} id="connection-status-badge">
+                  {isOnline ? '● Online' : '▲ Offline (Local View)'}
+                </span>
+
+                <span className={`px-2.5 py-1 rounded-lg text-xs font-black uppercase tracking-wider select-none ${
+                  isSunlight ? 'bg-sky-100 text-sky-800' : 'bg-slate-950 text-emerald-400'
+                }`}>
+                  {viewerCount} {viewerCount === 1 ? 'person' : 'people'} online
+                </span>
+              </div>
+            </div>
 
             {/* Today's Attendance Card */}
             <div className={`p-5 rounded-2xl border space-y-4 select-none ${

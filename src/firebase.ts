@@ -43,15 +43,16 @@ if (firebaseConfig && firebaseConfig.apiKey && firebaseConfig.apiKey.length > 5)
     isFirebaseEnabled = true;
     console.log("Firebase initialized successfully with config:", firebaseConfig.projectId);
   } catch (error) {
-    console.error("Failed to initialize Firebase:", error);
+    console.warn("Failed to initialize Firebase:", error);
   }
 } else {
   console.log("Using Offline/Local state storage. (No API Key found in firebase-applet-config.json)");
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errMsg = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMsg,
     authInfo: {
       userId: auth?.currentUser?.uid || null,
       email: auth?.currentUser?.email || null,
@@ -61,7 +62,21 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+
+  const isOfflineError = 
+    errMsg.includes('offline') || 
+    errMsg.includes('unavailable') || 
+    errMsg.includes('Could not reach') || 
+    errMsg.includes('Connection failed') ||
+    errMsg.includes('FirebaseError: [code=unavailable]');
+
+  if (isOfflineError) {
+    console.warn('Firestore (Handled Offline):', JSON.stringify(errInfo));
+    // Gracefully handle offline without throwing to keep application functional via LocalStorage
+    return;
+  }
+
+  console.warn('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
 
