@@ -37,6 +37,55 @@ import { saveMatch, fetchAllMatches, listenToMatch, deleteMatch, saveAttendance,
 import { isFirebaseEnabled } from './firebase';
 
 export default function App() {
+  // User Authentication Role: 'scorer' | 'player' | null
+  const [userRole, setUserRole] = useState<'scorer' | 'player' | null>(() => {
+    return localStorage.getItem('cricket_user_role') as any;
+  });
+
+  const [roleInput, setRoleInput] = useState<'scorer' | 'player' | null>(null);
+  const [passphraseInput, setPassphraseInput] = useState<string>('');
+  const [passphraseError, setPassphraseError] = useState<string | null>(null);
+
+  // Levenshtein distance calculation for minor typos
+  const calculateLevenshtein = (a: string, b: string): number => {
+    const tmp = [];
+    for (let i = 0; i <= a.length; i++) {
+      tmp[i] = [i];
+    }
+    for (let j = 0; j <= b.length; j++) {
+      tmp[0][j] = j;
+    }
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        tmp[i][j] = Math.min(
+          tmp[i - 1][j] + 1, // deletion
+          tmp[i][j - 1] + 1, // insertion
+          tmp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1) // substitution
+        );
+      }
+    }
+    return tmp[a.length][b.length];
+  };
+
+  const handleVerifyScorer = () => {
+    const cleanIn = passphraseInput.trim().toLowerCase().replace(/\s+/g, ' ');
+    const target = "i am scorer";
+    
+    // Exact match or Levenshtein distance <= 2 for minor typos
+    if (cleanIn === target || calculateLevenshtein(cleanIn, target) <= 2) {
+      triggerHapticFeedback();
+      setUserRole('scorer');
+      localStorage.setItem('cricket_user_role', 'scorer');
+      triggerToast("🔐 Scorer authentication successful!");
+      setPassphraseInput('');
+      setPassphraseError(null);
+      setRoleInput(null);
+    } else {
+      triggerHapticFeedback();
+      setPassphraseError("❌ Incorrect passphrase. Please write: 'I am scorer'");
+    }
+  };
+
   // Views: 'home' | 'create' | 'squads' | 'toss' | 'scoring' | 'result' | 'viewer'
   const [currentView, setCurrentView] = useState<'home' | 'create' | 'squads' | 'toss' | 'scoring' | 'result' | 'viewer'>('home');
   const [matchesList, setMatchesList] = useState<CricketMatch[]>([]);
@@ -131,6 +180,17 @@ export default function App() {
   // Toast notification
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Route/View protection guard: if not scorer, redirect private screens to home
+  useEffect(() => {
+    if (userRole && userRole !== 'scorer') {
+      const scoringViews = ['create', 'squads', 'toss', 'scoring'];
+      if (scoringViews.includes(currentView)) {
+        setCurrentView('home');
+        triggerToast("🔐 View restricted to Official Scorers only.");
+      }
+    }
+  }, [currentView, userRole]);
+
   // Read Deep-Link/Spectator parameters on Mount
   useEffect(() => {
     const handleUrlLoading = async () => {
@@ -223,6 +283,10 @@ export default function App() {
   };
 
   const handleAddAttendancePlayers = async (inputRaw: string) => {
+    if (userRole !== 'scorer') {
+      triggerToast("🔐 Operation restricted to scorers only");
+      return;
+    }
     if (!inputRaw || !inputRaw.trim()) return;
     const names = inputRaw.split(',')
       .map(n => n.trim())
@@ -252,6 +316,10 @@ export default function App() {
   };
 
   const handleRemoveAttendancePlayer = async (nameToRemove: string) => {
+    if (userRole !== 'scorer') {
+      triggerToast("🔐 Operation restricted to scorers only");
+      return;
+    }
     const updated = attendancePlayers.filter(p => p !== nameToRemove);
     setAttendancePlayers(updated);
 
@@ -289,6 +357,10 @@ export default function App() {
 
   // Create match action using Today's Attendance and matching assignments
   const handleInitiateMatchCreation = async () => {
+    if (userRole !== 'scorer') {
+      triggerToast("🔐 Operation restricted to scorers only");
+      return;
+    }
     triggerHapticFeedback();
 
     let initialASquad: string[] = [];
@@ -1066,6 +1138,10 @@ export default function App() {
 
   // Delete matching telemetry logic
   const handleDeleteMatch = (matchId: string) => {
+    if (userRole !== 'scorer') {
+      triggerToast("🔐 Operation restricted to scorers only");
+      return;
+    }
     triggerHapticFeedback();
     triggerConfirm(
       "🗑️ Delete Scorecard",
@@ -1148,8 +1224,13 @@ export default function App() {
     extractSquadsAndTeamNames(matchObj);
     
     // Retrieve player arrays from name matching
-    setCurrentView('scoring');
-    triggerToast("🏏 Scoreboard Loaded! Pitch is ready.");
+    if (userRole === 'scorer') {
+      setCurrentView('scoring');
+      triggerToast("🏏 Scoreboard Loaded! Pitch is ready.");
+    } else {
+      setCurrentView('viewer');
+      triggerToast("📊 Match Scorecard Loaded to View.");
+    }
   };
 
   // Return Home
@@ -1162,6 +1243,176 @@ export default function App() {
 
   // Theme support
   const isSunlight = themeMode === 'sunlight';
+
+  if (!userRole) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center p-4 transition-colors duration-300 ${
+        isSunlight ? 'bg-slate-100 text-slate-900' : 'bg-slate-950 text-slate-100'
+      }`}>
+        {/* FIXED TOAST MESSAGE IN ENTRY SCREEN */}
+        <AnimatePresence>
+          {toastMessage && (
+            <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 w-auto px-4 py-2 bg-slate-900 text-white rounded-full border border-slate-705 shadow-xl font-medium text-sm flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-450 animate-ping"></span>
+              {toastMessage}
+            </div>
+          )}
+        </AnimatePresence>
+
+        <div className={`w-full max-w-md p-6 sm:p-8 rounded-3xl border shadow-2xl space-y-6 ${
+          isSunlight ? 'bg-white border-slate-200 text-slate-900' : 'bg-slate-900 border-slate-800 text-white'
+        }`} id="role-selection-card">
+          <div className="text-center space-y-2 select-none">
+            <div className="mx-auto w-16 h-16 rounded-2xl bg-amber-500/10 dark:bg-amber-400/10 flex items-center justify-center text-amber-500 animate-bounce">
+              <Trophy className="w-9 h-9 text-red-650 fill-red-500" />
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-display font-extrabold tracking-tight text-indigo-600 dark:text-indigo-400">
+              Utrecht Ultimates
+            </h2>
+            <p className="text-sm opacity-60">
+              Utrecht Champions League Outdoor Scorekeeper!
+            </p>
+          </div>
+
+          {!roleInput ? (
+            <div className="space-y-4">
+              <p className="text-xs uppercase font-extrabold tracking-widest opacity-40 text-center">
+                Select your User Access Role
+              </p>
+              
+              <div className="grid grid-cols-1 gap-4">
+                {/* OPTION 1: SCORER */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHapticFeedback();
+                    setRoleInput('scorer');
+                    setPassphraseError(null);
+                  }}
+                  className={`p-5 rounded-2xl border text-left transition-all hover:scale-[1.01] active:scale-[0.99] flex flex-col gap-2 group ${
+                    isSunlight 
+                      ? 'bg-slate-50 border-slate-200 hover:border-red-400 hover:bg-slate-50 shadow-sm' 
+                      : 'bg-slate-850 border-slate-800 hover:border-red-600 hover:bg-slate-800'
+                  }`}
+                  id="select-scorer-role-button"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="p-2 bg-red-100 dark:bg-red-950/50 rounded-xl text-red-500">
+                      <UserPlus className="w-5 h-5" />
+                    </span>
+                    <h3 className="text-lg font-bold font-display group-hover:text-red-500 transition-colors">
+                      🏆 Official Scorer
+                    </h3>
+                  </div>
+                  <p className="text-xs opacity-65 leading-relaxed">
+                    Log in with passphrase. Grants full permissions to register matches, check-in players, manage tosses, record runs/wickets, and write telemetries.
+                  </p>
+                </button>
+
+                {/* OPTION 2: SPECTATOR / PLAYER */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHapticFeedback();
+                    setUserRole('player');
+                    localStorage.setItem('cricket_user_role', 'player');
+                    triggerToast("👀 Welcome! You are loaded in read-only Spectator Mode.");
+                  }}
+                  className={`p-5 rounded-2xl border text-left transition-all hover:scale-[1.01] active:scale-[0.99] flex flex-col gap-2 group ${
+                    isSunlight 
+                      ? 'bg-slate-50 border-slate-200 hover:border-indigo-400 hover:bg-slate-50 shadow-sm' 
+                      : 'bg-slate-850 border-slate-800 hover:border-indigo-600 hover:bg-slate-800'
+                  }`}
+                  id="select-player-role-button"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="p-2 bg-indigo-100 dark:bg-indigo-950/50 rounded-xl text-indigo-500">
+                      <Users className="w-5 h-5" />
+                    </span>
+                    <h3 className="text-lg font-bold font-display group-hover:text-indigo-500 transition-colors">
+                      👀 Match Player / Fan
+                    </h3>
+                  </div>
+                  <p className="text-xs opacity-65 leading-relaxed">
+                    Instant access without credentials. Grants real-time display to track active match scorecards, player pools, and view-only statistics.
+                  </p>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <span className="text-xs uppercase font-extrabold tracking-widest text-red-500">
+                  Scorer Verification
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    triggerHapticFeedback();
+                    setRoleInput(null);
+                    setPassphraseInput('');
+                    setPassphraseError(null);
+                  }}
+                  className="text-xs hover:underline opacity-60 font-bold text-slate-500"
+                >
+                  ← Go Back
+                </button>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold opacity-75">
+                  Enter Scorer Pass Phrase:
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Type pass phrase..."
+                    value={passphraseInput}
+                    onChange={(e) => {
+                      setPassphraseInput(e.target.value);
+                      if (passphraseError) setPassphraseError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleVerifyScorer();
+                      }
+                    }}
+                    className={`w-full px-4 py-3 rounded-xl border focus:outline-none focus:ring-2 focus:ring-red-500 text-sm font-medium ${
+                      isSunlight 
+                        ? 'bg-slate-55 border-slate-300 text-slate-900 placeholder:text-slate-450' 
+                        : 'bg-slate-950 border-slate-800 text-slate-100 placeholder:text-slate-650'
+                    }`}
+                    id="scorer-passphrase-input"
+                    autoFocus
+                  />
+                </div>
+                {passphraseError && (
+                  <p className="text-xs text-red-500 font-bold mt-1" id="passphrase-error-msg">
+                    {passphraseError}
+                  </p>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleVerifyScorer}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-sm rounded-xl active:scale-97 transition-all shadow-md mt-2"
+                id="submit-passphrase-button"
+              >
+                Log In as Official Scorer 🔓
+              </button>
+            </div>
+          )}
+
+          <div className="text-center pt-2">
+            <span className="text-[10px] opacity-40 uppercase tracking-widest font-mono">
+              Utrecht Ultimates v2.4.0
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`min-h-screen pb-16 transition-colors duration-200 ${
@@ -1183,6 +1434,35 @@ export default function App() {
 
         {/* Toggles for sunlight legibility and click vibs */}
         <div className="flex items-center gap-2">
+          {/* User Role switch/badge */}
+          {userRole && (
+            <button
+              onClick={() => {
+                triggerHapticFeedback();
+                triggerConfirm(
+                  "🔄 Switch Access Role",
+                  `You are currently logged in as ${userRole === 'scorer' ? 'Official Scorer (Full Privileges)' : 'Player/Spectator (Read-Only)'}. Do you want to sign out and choose a role again?`,
+                  () => {
+                    setUserRole(null);
+                    localStorage.removeItem('cricket_user_role');
+                    setCurrentView('home');
+                    triggerToast("Logged out of role! Select role again.");
+                  },
+                  'warning'
+                );
+              }}
+              className={`px-3 py-2 border rounded-lg text-xs font-black uppercase tracking-tight flex items-center gap-1.5 transition-all outline-none ${
+                userRole === 'scorer'
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white border-rose-700 font-extrabold shadow-sm'
+                  : 'bg-indigo-600 hover:bg-indigo-550 dark:bg-indigo-950 dark:border-indigo-800 text-indigo-100 dark:text-indigo-400 border-indigo-700 font-bold shadow-sm'
+              }`}
+              title="Click to switch role or log out"
+              id="role-switch-header-btn"
+            >
+              <span>{userRole === 'scorer' ? '🏆 SCORER' : '👀 PLAYER'}</span>
+            </button>
+          )}
+
           {/* Haptic trigger */}
           <button 
             onClick={() => { setHapticFeedback(!hapticFeedback); triggerHapticFeedback(); }}
@@ -1274,68 +1554,74 @@ export default function App() {
                       }`}
                     >
                       <span className="truncate max-w-[120px]">{name}</span>
-                      <button 
-                        onClick={() => handleRemoveAttendancePlayer(name)}
-                        className="p-0.5 rounded-full hover:bg-black/10 dark:hover:bg-white/15 focus:outline-none transition-colors"
-                        aria-label={`Remove ${name}`}
-                      >
-                        <X className="w-3.5 h-3.5 opacity-60 group-hover/chip:opacity-100" />
-                      </button>
+                      {userRole === 'scorer' && (
+                        <button 
+                          onClick={() => handleRemoveAttendancePlayer(name)}
+                          className="p-0.5 rounded-full hover:bg-black/10 dark:hover:bg-white/15 focus:outline-none transition-colors"
+                          aria-label={`Remove ${name}`}
+                        >
+                          <X className="w-3.5 h-3.5 opacity-60 group-hover/chip:opacity-100" />
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
 
               {/* Add Players inputs section */}
-              <div className="flex gap-2 pt-1">
-                <div className="relative flex-1">
-                  <input
-                    type="text"
-                    value={attendanceInput}
-                    onChange={(e) => setAttendanceInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        handleAddAttendancePlayers(attendanceInput);
-                      }
-                    }}
-                    placeholder="Add players (comma-separated, e.g. Andy, Ajit)"
-                    className={`w-full px-4 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
-                      isSunlight 
-                        ? 'bg-slate-50 border-slate-300 text-slate-900 placeholder:text-slate-400 focus:bg-white' 
-                        : 'bg-slate-950 border-slate-800 text-slate-100 placeholder:text-slate-600 focus:bg-slate-900'
-                    }`}
-                  />
+              {userRole === 'scorer' && (
+                <div className="flex gap-2 pt-1">
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={attendanceInput}
+                      onChange={(e) => setAttendanceInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleAddAttendancePlayers(attendanceInput);
+                        }
+                      }}
+                      placeholder="Add players (comma-separated, e.g. Andy, Ajit)"
+                      className={`w-full px-4 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                        isSunlight 
+                          ? 'bg-slate-50 border-slate-300 text-slate-900 placeholder:text-slate-400 focus:bg-white' 
+                          : 'bg-slate-950 border-slate-800 text-slate-100 placeholder:text-slate-600 focus:bg-slate-900'
+                      }`}
+                    />
+                  </div>
+                  <button
+                    onClick={() => handleAddAttendancePlayers(attendanceInput)}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 active:scale-97 text-white font-medium text-sm rounded-xl transition-all shadow-sm flex items-center gap-1 shrink-0"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Add</span>
+                  </button>
                 </div>
-                <button
-                  onClick={() => handleAddAttendancePlayers(attendanceInput)}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 active:scale-97 text-white font-medium text-sm rounded-xl transition-all shadow-sm flex items-center gap-1 shrink-0"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Add</span>
-                </button>
-              </div>
+              )}
             </div>
 
             {/* Core Grid Cards */}
-            <div className="grid grid-cols-1 select-none gap-4">
-              {/* PRIMARY BUTTON - CREATE MATCH */}
-              <button
-                onClick={() => { handleInitiateMatchCreation(); }}
-                className="w-full text-left p-6 rounded-2xl flex items-center justify-between bg-emerald-600 border border-emerald-700 text-white hover:bg-emerald-500 active:scale-98 transition-all shadow-md group py-8"
-                id="create-match-big-button"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="p-3.5 bg-emerald-700/60 rounded-xl group-hover:scale-110 transition-transform">
-                    <UserPlus className="w-8 h-8" />
+            {userRole === 'scorer' && (
+              <div className="grid grid-cols-1 select-none gap-4">
+                {/* PRIMARY BUTTON - CREATE MATCH */}
+                <button
+                  onClick={() => { handleInitiateMatchCreation(); }}
+                  className="w-full text-left p-6 rounded-2xl flex items-center justify-between bg-emerald-600 border border-emerald-700 text-white hover:bg-emerald-500 active:scale-98 transition-all shadow-md group py-8"
+                  id="create-match-big-button"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="p-3.5 bg-emerald-700/60 rounded-xl group-hover:scale-110 transition-transform">
+                      <UserPlus className="w-8 h-8" />
+                    </div>
+                    <div>
+                      <h3 className="text-2xl font-display font-bold">New Scorecard</h3>
+                      <p className="text-emerald-500 text-sm">Create match and setup teams</p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-2xl font-display font-bold">New Scorecard</h3>
-                    <p className="text-emerald-500 text-sm">Create match and setup teams</p>
-                  </div>
-                </div>
-                <ChevronRight className="w-8 h-8 opacity-80" />
-              </button>
-            </div>
+                  <ChevronRight className="w-8 h-8 opacity-80" />
+                </button>
+              </div>
+            )}
 
             {/* PREVIOUS MATCHES SECTIONS */}
             <div className={`p-4 rounded-2xl border space-y-4 ${
@@ -1444,13 +1730,15 @@ export default function App() {
                             <span>Live</span>
                           </button>
 
-                          <button
-                            onClick={() => handleDeleteMatch(m.id)}
-                            className="p-2 text-rose-500 hover:bg-rose-500/10 border border-rose-500/20 rounded-lg flex items-center justify-center font-bold"
-                            title="Delete Scorecard"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {userRole === 'scorer' && (
+                            <button
+                              onClick={() => handleDeleteMatch(m.id)}
+                              className="p-2 text-rose-500 hover:bg-rose-500/10 border border-rose-500/20 rounded-lg flex items-center justify-center font-bold"
+                              title="Delete Scorecard"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
