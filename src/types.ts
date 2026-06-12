@@ -77,5 +77,6 @@ export interface CricketMatch {
   createdAt: number;
   updatedAt: number;
   ballHistory: BallRecord[]; // for full undo log and viewers
+  enableHalfwayRules?: boolean;
   creatorId?: string;
 }

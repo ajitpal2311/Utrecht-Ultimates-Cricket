@@ -84,6 +84,8 @@ export default function App() {
   const [teamBName, setTeamBName] = useState('Amstelveen CC');
   const [oversCount, setOversCount] = useState<number>(5);
   const [playersLimit, setPlayersLimit] = useState<number>(11);
+  const [enableHalfwayRules, setEnableHalfwayRules] = useState<boolean>(true);
+  const [noBallPromptOpen, setNoBallPromptOpen] = useState<boolean>(false);
 
   // Squad setup state
   const [teamASquad, setTeamASquad] = useState<string[]>([]);
@@ -171,7 +173,7 @@ export default function App() {
   // Create match action
   const handleInitiateMatchCreation = () => {
     triggerHapticFeedback();
-    const cleanMatch = createNewMatch(matchName, teamAName, teamBName, oversCount, playersLimit, null);
+    const cleanMatch = createNewMatch(matchName, teamAName, teamBName, oversCount, playersLimit, null, enableHalfwayRules);
     
     // Generate default player names to save outdoor typing time
     const initialASquad = Array.from({ length: playersLimit }, (_, i) => `Player ${i + 1}`);
@@ -294,6 +296,67 @@ export default function App() {
         return;
       }
       setTeamBSquad(teamBSquad.filter((_, idx) => idx !== index));
+    }
+  };
+
+  // Perform Wide Scoring
+  const handleWideClick = async () => {
+    if (!currentMatch) return;
+    const activeInnings = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
+    if (!activeInnings) return;
+
+    if (!activeInnings.currentBowlerId) {
+      triggerToast("⚠️ Tap 'CHOOSE BOWLER' below to assign a bowler!");
+      return;
+    }
+    if (!activeInnings.currentBatter1Id || !activeInnings.currentBatter2Id || !activeInnings.strikerId) {
+      triggerToast("⚠️ Assign new batsmen first!");
+      return;
+    }
+
+    triggerHapticFeedback();
+    const updated = recordDelivery(currentMatch, 0, 'wd', false);
+
+    setCurrentMatch(updated);
+    setScoringExtrasMode(null);
+    await saveMatch(updated);
+
+    if (updated.status === 'completed') {
+      setCurrentView('result');
+      loadAllMatches();
+    } else if (updated.currentInningsIndex !== currentMatch.currentInningsIndex) {
+      initializeInnings2(updated);
+    }
+  };
+
+  // Perform No-Ball Runs Submission
+  const submitNoBallRuns = async (battingRuns: number) => {
+    if (!currentMatch) return;
+    const activeInnings = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
+    if (!activeInnings) return;
+
+    if (!activeInnings.currentBowlerId) {
+      triggerToast("⚠️ Tap 'CHOOSE BOWLER' below to assign a bowler!");
+      return;
+    }
+    if (!activeInnings.currentBatter1Id || !activeInnings.currentBatter2Id || !activeInnings.strikerId) {
+      triggerToast("⚠️ Assign new batsmen first!");
+      return;
+    }
+
+    triggerHapticFeedback();
+    const updated = recordDelivery(currentMatch, battingRuns, 'nb', false);
+
+    setNoBallPromptOpen(false);
+    setCurrentMatch(updated);
+    setScoringExtrasMode(null);
+    await saveMatch(updated);
+
+    if (updated.status === 'completed') {
+      setCurrentView('result');
+      loadAllMatches();
+    } else if (updated.currentInningsIndex !== currentMatch.currentInningsIndex) {
+      initializeInnings2(updated);
     }
   };
 
@@ -979,6 +1042,31 @@ export default function App() {
 
               </div>
 
+              {/* Custom Rules Section */}
+              <div className="p-4 rounded-xl border bg-slate-50 dark:bg-slate-850/50 border-slate-200 dark:border-slate-800 space-y-3.5">
+                <h4 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                  <span>⚙️ Match Options & Rules</span>
+                </h4>
+                <label className="flex items-start gap-3 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={enableHalfwayRules}
+                    onChange={(e) => { triggerHapticFeedback(); setEnableHalfwayRules(e.target.checked); }}
+                    className="w-5 h-5 accent-emerald-500 rounded border-2 border-slate-300 dark:border-slate-700 focus:ring-emerald-500 mt-0.5"
+                    id="checkbox-enable-halfway-rules"
+                  />
+                  <div className="flex-1">
+                    <span className="text-sm font-bold block text-slate-800 dark:text-slate-100">
+                      Enable Halfway Wide/No-Ball Rule
+                    </span>
+                    <span className="text-xs text-slate-500 dark:text-slate-400 block leading-normal mt-0.5">
+                      Before halfway: wide/NB is worth 3 runs and counts as a legal delivery. 
+                      After halfway: wide/NB is worth 1 run and must be bowled again.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
               {/* Action and trigger */}
               <button
                 onClick={handleInitiateMatchCreation}
@@ -1330,14 +1418,36 @@ export default function App() {
                         <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider">Run Rate (CRR)</span>
                         <span className="text-xl font-bold font-mono">{crr}</span>
                       </div>
-                      <div>
-                        <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider">Total Extras</span>
-                        <span className="text-xl font-bold font-mono">
-                          {inn.extras.wides + inn.extras.noBalls + inn.extras.byes + inn.extras.legByes}
-                        </span>
-                        <span className="text-[9px] opacity-60 font-mono block">
-                          (W{inn.extras.wides} N{inn.extras.noBalls} B{inn.extras.byes} L{inn.extras.legByes})
-                        </span>
+                      <div className="text-left text-xs space-y-1 bg-slate-50 dark:bg-slate-850 p-2 text-slate-800 dark:text-slate-100 rounded-xl border border-slate-200 dark:border-slate-800 min-w-[130px]">
+                        <div className="flex justify-between font-bold">
+                          <span className="text-slate-500 uppercase text-[9px] tracking-tight">Total Extras:</span>
+                          <span className="font-mono text-indigo-500 font-extrabold">
+                            {inn.extras.wides + inn.extras.noBalls + inn.extras.byes + inn.extras.legByes}
+                          </span>
+                        </div>
+                        <div className="flex justify-between pl-1 text-[11px]">
+                          <span className="text-slate-400">↳ Wides:</span>
+                          <span className="font-bold font-mono">{inn.extras.wides}</span>
+                        </div>
+                        <div className="flex justify-between pl-1 text-[11px]">
+                          <span className="text-slate-400">↳ No-Balls:</span>
+                          <span className="font-bold font-mono">{inn.extras.noBalls}</span>
+                        </div>
+                        <div className="flex justify-between pl-1 text-[11px]">
+                          <span className="text-slate-400">↳ Off-Bat NB:</span>
+                          <span className="font-bold font-mono text-emerald-500">
+                            {(() => {
+                              const nbBattingRuns = currentMatch.ballHistory
+                                .filter(b => b.inningIndex === innIdx && b.extrasType === 'nb')
+                                .reduce((sum, b) => sum + b.runs, 0);
+                              return nbBattingRuns;
+                            })()}
+                          </span>
+                        </div>
+                        <div className="flex justify-between pl-1 text-[10px] opacity-70">
+                          <span className="text-slate-400">↳ Byes/LByes:</span>
+                          <span className="font-semibold font-mono">{inn.extras.byes + inn.extras.legByes}</span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1625,13 +1735,11 @@ export default function App() {
               isSunlight ? 'bg-amber-100/50 border-amber-300' : 'bg-slate-900/65 border-slate-800'
             }`}>
               
-              {/* Extra scoring modifier picker (Wide, No Ball, Byes, Legbyes) */}
-              <div className="flex items-center gap-2 select-none justify-around">
-                <span className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">EXTRA TYPE MODIFIER:</span>
+              {/* Secondary Extra scoring modifiers (Byes, Legbyes) */}
+              <div className="flex items-center gap-2 select-none justify-between border-b pb-3 border-dashed border-slate-350 dark:border-slate-850">
+                <span className="text-[10px] font-bold text-slate-500 block uppercase tracking-wider">SECONDARY MODIFIERS:</span>
                 <div className="flex gap-2">
                   {[
-                    { id: 'wd', label: '➕ WIDE' },
-                    { id: 'nb', label: '⚡ NO BALL' },
                     { id: 'by', label: '🏏 BYES' },
                     { id: 'lb', label: '🥎 LEGBYES' }
                   ].map(ex => (
@@ -1641,91 +1749,137 @@ export default function App() {
                         triggerHapticFeedback();
                         setScoringExtrasMode(scoringExtrasMode === ex.id ? null : ex.id as any);
                       }}
-                      className={`px-3 py-2 text-xs font-black rounded-lg transition-all ${
+                      className={`px-3 py-1.5 text-xs font-black rounded-lg transition-all ${
                         scoringExtrasMode === ex.id 
-                          ? 'bg-amber-400 text-slate-950 border-2 border-amber-500 scale-105' 
-                          : 'bg-slate-200 text-slate-800 dark:bg-slate-800 dark:text-slate-350 hover:bg-slate-300'
+                          ? 'bg-amber-400 text-slate-950 border border-amber-500 scale-102 font-bold' 
+                          : 'bg-slate-200 text-slate-850 dark:bg-slate-800 dark:text-slate-350 hover:bg-slate-300'
                       }`}
                       id={`extra-modifier-${ex.id}`}
                     >
                       {ex.label}
                     </button>
                   ))}
+                  {scoringExtrasMode && (
+                    <span className="text-[9px] font-mono text-red-500 animate-pulse font-extrabold self-center">
+                      *TAP RUNS BUTTON NEXT
+                    </span>
+                  )}
                 </div>
               </div>
 
               {/* CORE SCORING RUN GRID (GIGANTIC BUTTONS MINIMUM 60x60PX) */}
-              <div className="grid grid-cols-3 gap-3.5">
+              <div className="grid grid-cols-3 gap-3">
                 {/* 0 dot runs */}
                 <button
                   onClick={() => handleScoreEvent(0)}
-                  className="p-6 bg-slate-300 hover:bg-slate-200 text-slate-900 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-white rounded-2xl flex flex-col items-center justify-center gap-1 active:scale-95 shadow-md border-b-4 border-slate-400 select-none py-7"
+                  className="p-5 bg-slate-200 hover:bg-slate-100 text-slate-900 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-white rounded-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 shadow border-b-4 border-slate-350 dark:border-slate-900 select-none py-5"
                   id="score-btn-0"
                 >
                   <span className="text-3xl font-display font-black">0</span>
-                  <span className="text-[10px] font-mono uppercase opacity-75 font-semibold">Dot Ball</span>
+                  <span className="text-[9px] font-mono uppercase opacity-75 font-semibold">Dot Ball</span>
                 </button>
 
                 {/* 1 runs */}
                 <button
                   onClick={() => handleScoreEvent(1)}
-                  className="p-6 bg-sky-200 hover:bg-sky-100 text-sky-950 dark:bg-sky-900 dark:hover:bg-sky-800 dark:text-sky-100 rounded-2xl flex flex-col items-center justify-center gap-1 active:scale-95 shadow-md border-b-4 border-sky-400 select-none py-7"
+                  className="p-5 bg-sky-200 hover:bg-sky-100 text-sky-950 dark:bg-sky-900 dark:hover:bg-sky-800 dark:text-sky-100 rounded-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 shadow border-b-4 border-sky-350 dark:border-sky-950 select-none py-5"
                   id="score-btn-1"
                 >
                   <span className="text-3xl font-display font-black">1</span>
-                  <span className="text-[10px] font-mono uppercase opacity-75 font-semibold">Single</span>
+                  <span className="text-[9px] font-mono uppercase opacity-75 font-semibold">Single</span>
                 </button>
 
                 {/* 2 runs */}
                 <button
                   onClick={() => handleScoreEvent(2)}
-                  className="p-6 bg-indigo-200 hover:bg-indigo-100 text-indigo-950 dark:bg-indigo-900 dark:hover:bg-indigo-800 dark:text-indigo-100 rounded-2xl flex flex-col items-center justify-center gap-1 active:scale-95 shadow-md border-b-4 border-indigo-400 select-none py-7"
+                  className="p-5 bg-indigo-200 hover:bg-indigo-100 text-indigo-950 dark:bg-indigo-900 dark:hover:bg-indigo-800 dark:text-indigo-100 rounded-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 shadow border-b-4 border-indigo-350 dark:border-indigo-950 select-none py-5"
                   id="score-btn-2"
                 >
                   <span className="text-3xl font-display font-black">2</span>
-                  <span className="text-[10px] font-mono uppercase opacity-75 font-semibold">Double</span>
+                  <span className="text-[9px] font-mono uppercase opacity-75 font-semibold">Double</span>
                 </button>
 
                 {/* 3 runs */}
                 <button
                   onClick={() => handleScoreEvent(3)}
-                  className="p-6 bg-purple-200 hover:bg-purple-100 text-purple-950 dark:bg-purple-900 dark:hover:bg-purple-800 dark:text-purple-150 rounded-2xl flex flex-col items-center justify-center gap-1 active:scale-95 shadow-md border-b-4 border-purple-400 select-none py-7"
+                  className="p-5 bg-purple-200 hover:bg-purple-100 text-purple-950 dark:bg-purple-900 dark:hover:bg-purple-800 dark:text-purple-150 rounded-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 shadow border-b-4 border-purple-350 dark:border-purple-950 select-none py-5"
                   id="score-btn-3"
                 >
                   <span className="text-3xl font-display font-black">3</span>
-                  <span className="text-[10px] font-mono uppercase opacity-75 font-semibold">Three</span>
+                  <span className="text-[9px] font-mono uppercase opacity-75 font-semibold">Three</span>
                 </button>
 
                 {/* 4 runs (Bright boundary emerald!) */}
                 <button
                   onClick={() => handleScoreEvent(4)}
-                  className="p-6 bg-emerald-500 hover:bg-emerald-400 text-white rounded-2xl flex flex-col items-center justify-center gap-1 active:scale-95 shadow-lg border-b-4 border-emerald-700 select-none py-7 transform scale-103"
+                  className="p-5 bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 shadow-md border-b-4 border-emerald-700 select-none py-5"
                   id="score-btn-4"
                 >
-                  <span className="text-3.5xl font-display font-black">FOUR! 🟢</span>
-                  <span className="text-[10px] font-mono uppercase opacity-85 font-black">Boundary</span>
+                  <span className="text-3.5xl font-display font-black font-extrabold">4️⃣🏏</span>
+                  <span className="text-[9px] font-mono uppercase opacity-85 font-black">Boundary</span>
                 </button>
 
                 {/* 6 runs (Neon boundary Indigo) */}
                 <button
                   onClick={() => handleScoreEvent(6)}
-                  className="p-6 bg-cyan-600 hover:bg-cyan-500 text-white rounded-2xl flex flex-col items-center justify-center gap-1 active:scale-95 shadow-lg border-b-4 border-cyan-800 select-none py-7 transform scale-103"
+                  className="p-5 bg-cyan-600 hover:bg-cyan-505 text-white rounded-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 shadow-md border-b-4 border-cyan-805 select-none py-5"
                   id="score-btn-6"
                 >
-                  <span className="text-3.5xl font-display font-black">SIX! 🔵</span>
-                  <span className="text-[10px] font-mono uppercase opacity-85 font-black">Maximum</span>
+                  <span className="text-3.5xl font-display font-black font-extrabold">6️⃣🚀</span>
+                  <span className="text-[9px] font-mono uppercase opacity-85 font-black">Maximum</span>
+                </button>
+              </div>
+
+              {/* AUTOMATED EXTRA DELIVERIES row (WIDE, NO BALL) */}
+              <div className="grid grid-cols-2 gap-3.5 pt-1">
+                {/* WIDE ACTION */}
+                <button
+                  onClick={handleWideClick}
+                  className="p-4 bg-amber-400 hover:bg-amber-300 text-slate-950 rounded-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 font-extrabold text-sm shadow border-b-4 border-amber-600 select-none py-4"
+                  id="score-btn-wide"
+                >
+                  <span className="text-2xl">🚫</span>
+                  <span className="font-display font-black uppercase tracking-tight">WIDE (Wd)</span>
+                  <span className="text-[9px] font-mono opacity-80 uppercase leading-none mt-1">
+                    {(() => {
+                      const inn = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
+                      if (!inn) return '';
+                      const halfwayBalls = (currentMatch.overs * 6) / 2;
+                      const isBefore = currentMatch.enableHalfwayRules && inn.balls < halfwayBalls;
+                      return currentMatch.enableHalfwayRules ? (isBefore ? '🔥 3 Runs (Legal)' : '❄️ 1 Run (Extra bowl)') : '1 Run (Extra bowl)';
+                    })()}
+                  </span>
+                </button>
+
+                {/* NO BALL ACTION */}
+                <button
+                  onClick={() => { triggerHapticFeedback(); setNoBallPromptOpen(true); }}
+                  className="p-4 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl flex flex-col items-center justify-center gap-0.5 active:scale-95 font-extrabold text-sm shadow border-b-4 border-amber-600 select-none py-4"
+                  id="score-btn-noball"
+                >
+                  <span className="text-2xl">⚡</span>
+                  <span className="font-display font-black uppercase tracking-tight">NO BALL (NB)</span>
+                  <span className="text-[9px] font-mono opacity-80 uppercase leading-none mt-1">
+                    {(() => {
+                      const inn = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
+                      if (!inn) return '';
+                      const halfwayBalls = (currentMatch.overs * 6) / 2;
+                      const isBefore = currentMatch.enableHalfwayRules && inn.balls < halfwayBalls;
+                      return currentMatch.enableHalfwayRules ? (isBefore ? '🔥 3 Runs + Batter' : '❄️ 1 Run + Batter') : '1 Run + Batter';
+                    })()}
+                  </span>
                 </button>
               </div>
 
               {/* SPECIAL ACTIONS ROW (WICKET OR UNDO) */}
-              <div className="grid grid-cols-2 gap-4 select-none">
+              <div className="grid grid-cols-2 gap-3.5 select-none pt-1">
                 {/* WICKET TRIGGER */}
                 <button
                   onClick={handleWicketPromptOpen}
-                  className="p-5 bg-red-600 hover:bg-red-500 text-white rounded-2xl flex items-center justify-center gap-3 active:scale-95 shadow-lg border-b-4 border-red-800 py-6 font-extrabold text-xl text-center shadow-red-700/25"
+                  className="p-4 bg-red-600 hover:bg-red-500 text-white rounded-xl flex items-center justify-center gap-2 active:scale-95 shadow-md border-b-4 border-red-800 py-4.5 font-extrabold text-base text-center"
                   id="score-btn-wicket"
                 >
-                  <span className="text-2xl animate-pulse">❌</span>
+                  <span className="text-xl">❌</span>
                   <span>WICKET OUT!</span>
                 </button>
 
@@ -1733,14 +1887,14 @@ export default function App() {
                 <button
                   onClick={handleUndoEvent}
                   disabled={currentMatch.ballHistory.length === 0}
-                  className={`p-5 rounded-2xl flex items-center justify-center gap-3 active:scale-95 shadow-md border-b-4 py-6 font-bold text-lg select-none ${
+                  className={`p-4 rounded-xl flex items-center justify-center gap-2 active:scale-95 shadow border-b-4 py-4.5 font-bold text-base select-none ${
                     currentMatch.ballHistory.length > 0
                       ? 'bg-slate-700 hover:bg-slate-600 text-white border-slate-900'
                       : 'bg-slate-205 text-slate-400 border-transparent cursor-not-allowed dark:bg-slate-800 dark:text-slate-650'
                   }`}
                   id="score-btn-undo"
                 >
-                  <RotateCcw className="w-5 h-5" />
+                  <RotateCcw className="w-4 h-4" />
                   <span>UNDO BALL</span>
                 </button>
               </div>
@@ -1849,6 +2003,51 @@ export default function App() {
                   >
                     Confirm Dismissal Out ❌
                   </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* NO-BALL BATTER RUNS SELECTOR POPUP (IF ACTIVE) */}
+            <AnimatePresence>
+              {noBallPromptOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className={`p-5 rounded-2xl border-2 space-y-4 ${
+                    isSunlight ? 'bg-amber-50 border-amber-300 text-slate-905' : 'bg-slate-900 border-amber-900 text-white'
+                  }`}
+                  id="noball-runs-editor-panel"
+                >
+                  <div className="flex justify-between items-center border-b pb-2 border-amber-200/50">
+                    <h5 className="font-extrabold text-amber-600 dark:text-amber-405 text-lg flex items-center gap-1.5 uppercase tracking-tight">
+                      <span>⚡ No-Ball Batting Runs</span>
+                    </h5>
+                    <button
+                      onClick={() => setNoBallPromptOpen(false)}
+                      className="p-1 px-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-extrabold text-xs rounded dark:bg-slate-800 dark:text-slate-200"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-normal">
+                    Please select the number of runs scored by the batsman off this No Ball. This is in addition to the No Ball local extra run(s).
+                  </p>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[0, 1, 2, 3, 4, 6].map(runsVal => (
+                      <button
+                        key={runsVal}
+                        onClick={() => submitNoBallRuns(runsVal)}
+                        className="py-4 rounded-xl border text-center font-black text-xl bg-white hover:bg-slate-50 dark:bg-slate-850 dark:hover:bg-slate-800 border-slate-300 dark:border-slate-700 active:scale-95 transition-all flex flex-col items-center justify-center"
+                        id={`noball-runs-val-${runsVal}`}
+                      >
+                        <span className="text-2.5xl font-display">{runsVal}</span>
+                        <span className="text-[9px] font-mono uppercase opacity-60 font-medium">
+                          {runsVal === 4 ? 'FOUR🏏' : runsVal === 6 ? 'SIX🚀' : 'Runs'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -1995,6 +2194,71 @@ export default function App() {
                             </p>
                             {currentMatch.innings2 && <span className="text-xs text-slate-400">({ballsToOvers(currentMatch.innings2.balls)} ov)</span>}
                           </div>
+                        </div>
+
+                        {/* Extras Breakdown Table */}
+                        <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-3 bg-slate-50 dark:bg-slate-950/20 text-xs text-slate-800 dark:text-slate-200">
+                          <span className="text-[10px] text-slate-400 block font-black uppercase tracking-wider mb-2">Inn Extras Breakdown</span>
+                          <table className="w-full text-left font-mono">
+                            <thead>
+                              <tr className="border-b text-[10px] text-slate-500 uppercase font-black">
+                                <th className="py-1">Category</th>
+                                <th className="py-1 text-right text-indigo-500">Innings 1</th>
+                                <th className="py-1 text-right text-cyan-600">Innings 2</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr className="border-b border-dashed border-slate-200 dark:border-slate-800">
+                                <td className="py-1.5 text-slate-400">Total Extras</td>
+                                <td className="py-1.5 text-right font-bold">
+                                  {currentMatch.innings1 ? (currentMatch.innings1.extras.wides + currentMatch.innings1.extras.noBalls + currentMatch.innings1.extras.byes + currentMatch.innings1.extras.legByes) : 0}
+                                </td>
+                                <td className="py-1.5 text-right font-bold">
+                                  {currentMatch.innings2 ? (currentMatch.innings2.extras.wides + currentMatch.innings2.extras.noBalls + currentMatch.innings2.extras.byes + currentMatch.innings2.extras.legByes) : 0}
+                                </td>
+                              </tr>
+                              <tr className="border-b border-dashed border-slate-200 dark:border-slate-800">
+                                <td className="py-1 text-slate-400">↳ Wide Extras</td>
+                                <td className="py-1 text-right">
+                                  {currentMatch.innings1?.extras.wides || 0}
+                                </td>
+                                <td className="py-1 text-right">
+                                  {currentMatch.innings2?.extras.wides || 0}
+                                </td>
+                              </tr>
+                              <tr className="border-b border-dashed border-slate-250 dark:border-slate-850">
+                                <td className="py-1 text-slate-400">↳ No-Ball Extras</td>
+                                <td className="py-1 text-right">
+                                  {currentMatch.innings1?.extras.noBalls || 0}
+                                </td>
+                                <td className="py-1 text-right">
+                                  {currentMatch.innings2?.extras.noBalls || 0}
+                                </td>
+                              </tr>
+                              <tr className="border-b border-dashed border-slate-255 dark:border-slate-855">
+                                <td className="py-1 text-slate-400">↳ Off-Bat NB runs</td>
+                                <td className="py-1 text-right text-emerald-500 font-bold">
+                                  {currentMatch.ballHistory
+                                    .filter(b => b.inningIndex === 1 && b.extrasType === 'nb')
+                                    .reduce((sum, b) => sum + b.runs, 0)}
+                                </td>
+                                <td className="py-1 text-right text-emerald-500 font-bold">
+                                  {currentMatch.ballHistory
+                                    .filter(b => b.inningIndex === 2 && b.extrasType === 'nb')
+                                    .reduce((sum, b) => sum + b.runs, 0)}
+                                </td>
+                              </tr>
+                              <tr className="opacity-70">
+                                <td className="py-1 text-slate-400">↳ Byes / LByte</td>
+                                <td className="py-1 text-right">
+                                  {(currentMatch.innings1?.extras.byes || 0) + (currentMatch.innings1?.extras.legByes || 0)}
+                                </td>
+                                <td className="py-1 text-right">
+                                  {(currentMatch.innings2?.extras.byes || 0) + (currentMatch.innings2?.extras.legByes || 0)}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
                         </div>
 
                         {/* Ball-by-ball history stream logs */}
@@ -2290,6 +2554,71 @@ export default function App() {
                           </p>
                           {currentMatch.innings2 && <span className="text-xs text-slate-400">({ballsToOvers(currentMatch.innings2.balls)} ov)</span>}
                         </div>
+                      </div>
+
+                      {/* Extras Breakdown Table */}
+                      <div className="border border-slate-200 dark:border-slate-800 rounded-xl p-3 bg-slate-50 dark:bg-slate-950/20 text-xs text-slate-800 dark:text-slate-200">
+                        <span className="text-[10px] text-slate-400 block font-black uppercase tracking-wider mb-2">Inn Extras Breakdown</span>
+                        <table className="w-full text-left font-mono">
+                          <thead>
+                            <tr className="border-b text-[10px] text-slate-500 uppercase font-black">
+                              <th className="py-1">Category</th>
+                              <th className="py-1 text-right text-indigo-500">Innings 1</th>
+                              <th className="py-1 text-right text-cyan-600">Innings 2</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr className="border-b border-dashed border-slate-200 dark:border-slate-800">
+                              <td className="py-1.5 text-slate-400">Total Extras</td>
+                              <td className="py-1.5 text-right font-bold">
+                                {currentMatch.innings1 ? (currentMatch.innings1.extras.wides + currentMatch.innings1.extras.noBalls + currentMatch.innings1.extras.byes + currentMatch.innings1.extras.legByes) : 0}
+                              </td>
+                              <td className="py-1.5 text-right font-bold">
+                                {currentMatch.innings2 ? (currentMatch.innings2.extras.wides + currentMatch.innings2.extras.noBalls + currentMatch.innings2.extras.byes + currentMatch.innings2.extras.legByes) : 0}
+                              </td>
+                            </tr>
+                            <tr className="border-b border-dashed border-slate-200 dark:border-slate-800">
+                              <td className="py-1 text-slate-400">↳ Wide Extras</td>
+                              <td className="py-1 text-right">
+                                {currentMatch.innings1?.extras.wides || 0}
+                              </td>
+                              <td className="py-1 text-right">
+                                {currentMatch.innings2?.extras.wides || 0}
+                              </td>
+                            </tr>
+                            <tr className="border-b border-dashed border-slate-250 dark:border-slate-850">
+                              <td className="py-1 text-slate-400">↳ No-Ball Extras</td>
+                              <td className="py-1 text-right">
+                                {currentMatch.innings1?.extras.noBalls || 0}
+                              </td>
+                              <td className="py-1 text-right">
+                                {currentMatch.innings2?.extras.noBalls || 0}
+                              </td>
+                            </tr>
+                            <tr className="border-b border-dashed border-slate-255 dark:border-slate-855">
+                              <td className="py-1 text-slate-400">↳ Off-Bat NB runs</td>
+                              <td className="py-1 text-right text-emerald-500 font-bold">
+                                {currentMatch.ballHistory
+                                  .filter(b => b.inningIndex === 1 && b.extrasType === 'nb')
+                                  .reduce((sum, b) => sum + b.runs, 0)}
+                              </td>
+                              <td className="py-1 text-right text-emerald-500 font-bold">
+                                {currentMatch.ballHistory
+                                  .filter(b => b.inningIndex === 2 && b.extrasType === 'nb')
+                                  .reduce((sum, b) => sum + b.runs, 0)}
+                              </td>
+                            </tr>
+                            <tr className="opacity-70">
+                              <td className="py-1 text-slate-400">↳ Byes / LByte</td>
+                              <td className="py-1 text-right">
+                                {(currentMatch.innings1?.extras.byes || 0) + (currentMatch.innings1?.extras.legByes || 0)}
+                              </td>
+                              <td className="py-1 text-right">
+                                {(currentMatch.innings2?.extras.byes || 0) + (currentMatch.innings2?.extras.legByes || 0)}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
                       </div>
 
                       {/* Display live over chips */}

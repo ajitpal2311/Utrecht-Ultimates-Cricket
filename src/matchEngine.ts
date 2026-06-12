@@ -59,9 +59,10 @@ export function createNewMatch(
   teamBName: string,
   overs: number,
   playersPerTeam: number,
-  creatorId: string | null
+  creatorId: string | null,
+  enableHalfwayRules?: boolean
 ): CricketMatch {
-  const matchId = `match-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const matchId = `match-${Date.now()}-${Math.floor(Math.random() * 1500)}`;
   return {
     id: matchId,
     matchName: matchName || 'Utrecht Social Match',
@@ -80,6 +81,7 @@ export function createNewMatch(
     createdAt: Date.now(),
     updatedAt: Date.now(),
     ballHistory: [],
+    enableHalfwayRules: !!enableHalfwayRules,
   };
 }
 
@@ -136,27 +138,81 @@ export function recordDelivery(
   let isLegalDelivery = true;
   let ballDisplay = '';
 
+  const halfwayBalls = (newMatch.overs * 6) / 2;
+  const useHalfwayRules = !!newMatch.enableHalfwayRules;
+  const isBeforeHalfway = useHalfwayRules && (innings.balls < halfwayBalls);
+
   // 1. Calculate Score Changes
   if (extrasType === 'wd') {
-    isLegalDelivery = false;
-    const wideRuns = 1 + runs; // 1 penalty run + runs run from it
-    innings.extras.wides += wideRuns;
-    teamRunsAdded = wideRuns;
-    bowler.runs += wideRuns;
-    ballDisplay = `${wideRuns}Wd`;
+    if (useHalfwayRules) {
+      if (isBeforeHalfway) {
+        isLegalDelivery = true;
+        const widePenalty = 3;
+        innings.extras.wides += widePenalty;
+        teamRunsAdded = widePenalty;
+        bowler.runs += widePenalty;
+        bowler.balls += 1;
+        ballDisplay = '3Wd';
+      } else {
+        isLegalDelivery = false;
+        const widePenalty = 1;
+        innings.extras.wides += widePenalty;
+        teamRunsAdded = widePenalty;
+        bowler.runs += widePenalty;
+        ballDisplay = '1Wd';
+      }
+    } else {
+      isLegalDelivery = false;
+      const wideRuns = 1 + runs; // 1 penalty run + runs run from it
+      innings.extras.wides += wideRuns;
+      teamRunsAdded = wideRuns;
+      bowler.runs += wideRuns;
+      ballDisplay = `${wideRuns}Wd`;
+    }
   } else if (extrasType === 'nb') {
-    isLegalDelivery = false;
-    const noBallPenalty = 1;
-    innings.extras.noBalls += noBallPenalty;
-    // If runs are scored off a no-ball, they are credited to the batsman (runs off bat)
-    batsman.runs += runs;
-    batsman.balls += 1;
-    if (runs === 4) batsman.fours += 1;
-    if (runs === 6) batsman.sixes += 1;
-    
-    teamRunsAdded = noBallPenalty + runs;
-    bowler.runs += noBallPenalty + runs;
-    ballDisplay = `Nb+${runs}`;
+    if (useHalfwayRules) {
+      if (isBeforeHalfway) {
+        isLegalDelivery = true;
+        const noBallPenalty = 3;
+        innings.extras.noBalls += noBallPenalty;
+        // Credit batting runs to batsman
+        batsman.runs += runs;
+        batsman.balls += 1;
+        if (runs === 4) batsman.fours += 1;
+        if (runs === 6) batsman.sixes += 1;
+        
+        teamRunsAdded = noBallPenalty + runs;
+        bowler.runs += noBallPenalty + runs;
+        bowler.balls += 1;
+        ballDisplay = runs > 0 ? `Nb+${runs}` : 'Nb';
+      } else {
+        isLegalDelivery = false;
+        const noBallPenalty = 1;
+        innings.extras.noBalls += noBallPenalty;
+        // Credit batting runs to batsman
+        batsman.runs += runs;
+        batsman.balls += 1;
+        if (runs === 4) batsman.fours += 1;
+        if (runs === 6) batsman.sixes += 1;
+        
+        teamRunsAdded = noBallPenalty + runs;
+        bowler.runs += noBallPenalty + runs;
+        ballDisplay = runs > 0 ? `Nb+${runs}` : 'Nb';
+      }
+    } else {
+      isLegalDelivery = false;
+      const noBallPenalty = 1;
+      innings.extras.noBalls += noBallPenalty;
+      // If runs are scored off a no-ball, they are credited to the batsman (runs off bat)
+      batsman.runs += runs;
+      batsman.balls += 1;
+      if (runs === 4) batsman.fours += 1;
+      if (runs === 6) batsman.sixes += 1;
+      
+      teamRunsAdded = noBallPenalty + runs;
+      bowler.runs += noBallPenalty + runs;
+      ballDisplay = runs > 0 ? `Nb+${runs}` : 'Nb';
+    }
   } else if (extrasType === 'by') {
     // Legal delivery
     isLegalDelivery = true;
@@ -195,7 +251,7 @@ export function recordDelivery(
   let finalDismissedId = dismissedPlayerId || strikerId;
   if (isWicket) {
     innings.wickets += 1;
-    ballDisplay = ballDisplay === '0' ? 'W' : `${ballDisplay}+W`;
+    ballDisplay = ballDisplay === '0' || ballDisplay === 'Nb' ? 'W' : `${ballDisplay}+W`;
     
     // Find batsman who got dismissed
     const dismissedBatsman = innings.battingOrder.find(p => p.id === finalDismissedId);
@@ -251,7 +307,7 @@ export function recordDelivery(
     bowlerId,
     runs: extrasType === null || extrasType === 'nb' ? runs : 0,
     extrasType,
-    extrasRuns: extrasType === 'wd' ? (1 + runs) : (extrasType === 'nb' ? 1 : runs),
+    extrasRuns: extrasType === 'wd' ? teamRunsAdded : (extrasType === 'nb' ? (useHalfwayRules ? (isBeforeHalfway ? 3 : 1) : 1) : runs),
     isWicket,
     wicketType,
     dismissedPlayerId: isWicket ? finalDismissedId : undefined,
@@ -379,6 +435,7 @@ export function undoLastDelivery(match: CricketMatch): CricketMatch {
     createdAt: match.createdAt,
     updatedAt: Date.now(),
     ballHistory: [],
+    enableHalfwayRules: match.enableHalfwayRules,
   };
 
   // Set proper status if matching toss etc.
