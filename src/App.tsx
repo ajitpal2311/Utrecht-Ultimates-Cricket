@@ -33,7 +33,7 @@ import {
   ballsToOvers, 
   calculateRunRate 
 } from './matchEngine';
-import { saveMatch, fetchAllMatches, listenToMatch, deleteMatch, saveAttendance, fetchAttendance, registerViewerHeartbeat, listenActiveViewers } from './firebaseService';
+import { saveMatch, fetchAllMatches, listenToMatch, deleteMatch, saveAttendance, fetchAttendance, registerViewerHeartbeat, listenActiveViewers, listenAllMatches, listenAttendance } from './firebaseService';
 import { isFirebaseEnabled } from './firebase';
 
 export default function App() {
@@ -239,62 +239,65 @@ export default function App() {
     };
   }, [sessionId]);
 
-  // Read Deep-Link/Spectator parameters on Mount
+  // 1. Deep-Link/Spectator Match Live Subscription
   useEffect(() => {
-    const handleUrlLoading = async () => {
-      const queryParams = new URLSearchParams(window.location.search);
-      let matchId = queryParams.get('matchId');
+    const queryParams = new URLSearchParams(window.location.search);
+    let matchId = queryParams.get('matchId');
+    
+    if (!matchId) {
+      const hash = window.location.hash;
+      if (hash && hash.includes('matchId=')) {
+        matchId = hash.split('matchId=')[1];
+      }
+    }
+
+    if (matchId) {
+      setLoading(true);
+      setCurrentView('viewer');
       
-      if (!matchId) {
-        const hash = window.location.hash;
-        if (hash && hash.includes('matchId=')) {
-          matchId = hash.split('matchId=')[1];
-        }
-      }
-
-      if (matchId) {
-        setLoading(true);
-        setCurrentView('viewer');
-        // Set up real-time subscribe
-        const unsubscribe = listenToMatch(
-          matchId,
-          (updatedMatch) => {
-            setCurrentMatch(updatedMatch);
-            if (updatedMatch) {
-              extractSquadsAndTeamNames(updatedMatch);
-            }
-            setLoading(false);
-          },
-          (err) => {
-            triggerToast("Match not found or offline");
-            setLoading(false);
+      const unsubscribe = listenToMatch(
+        matchId,
+        (updatedMatch) => {
+          setCurrentMatch(updatedMatch);
+          if (updatedMatch) {
+            extractSquadsAndTeamNames(updatedMatch);
           }
-        );
-        return () => unsubscribe();
-      }
-    };
-
-    const loadDailyAttendance = async () => {
-      const todayId = getTodayDateId();
-      try {
-        const todayAtt = await fetchAttendance(todayId);
-        if (todayAtt) {
-          setAttendancePlayers(todayAtt.players || []);
-          setAttendanceTeamA(todayAtt.teamA || []);
-          setAttendanceTeamB(todayAtt.teamB || []);
-        } else {
-          setAttendancePlayers([]);
-          setAttendanceTeamA([]);
-          setAttendanceTeamB([]);
+          setLoading(false);
+        },
+        (err) => {
+          console.warn("Could not load deep link match:", err);
+          triggerToast("⚠️ Match not found or offline");
+          setLoading(false);
         }
-      } catch (e) {
-        console.warn("Could not load daily attendance:", e);
-      }
-    };
+      );
+      
+      return () => unsubscribe();
+    }
+  }, []);
 
-    handleUrlLoading();
-    loadAllMatches();
-    loadDailyAttendance();
+  // 2. Real-time Matches List Synchronization
+  useEffect(() => {
+    const unsubscribe = listenAllMatches((matches) => {
+      setMatchesList(matches);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 3. Real-time Daily Attendance & Roster Synchronization
+  useEffect(() => {
+    const todayId = getTodayDateId();
+    const unsubscribe = listenAttendance(todayId, (todayAtt) => {
+      if (todayAtt) {
+        setAttendancePlayers(todayAtt.players || []);
+        setAttendanceTeamA(todayAtt.teamA || []);
+        setAttendanceTeamB(todayAtt.teamB || []);
+      } else {
+        setAttendancePlayers([]);
+        setAttendanceTeamA([]);
+        setAttendanceTeamB([]);
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   // Periodic match lookup for lists

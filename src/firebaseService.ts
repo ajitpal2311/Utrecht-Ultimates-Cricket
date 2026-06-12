@@ -301,4 +301,98 @@ export function listenActiveViewers(
   }
 }
 
+// 9. Subscribe to all matches in real-time
+export function listenAllMatches(
+  onUpdate: (matches: CricketMatch[]) => void
+): () => void {
+  const localMatches = getLocalMatches();
+
+  if (!isFirebaseEnabled || !db) {
+    // offline visual dummy simulation
+    onUpdate(localMatches.sort((a, b) => b.updatedAt - a.updatedAt));
+    const interval = setInterval(() => {
+      const currentLocals = getLocalMatches();
+      onUpdate(currentLocals.sort((a, b) => b.updatedAt - a.updatedAt));
+    }, 2000);
+    return () => clearInterval(interval);
+  }
+
+  try {
+    const unsub = onSnapshot(collection(db, 'matches'), (snapshot) => {
+      const fbMatches: CricketMatch[] = [];
+      snapshot.forEach((doc) => {
+        fbMatches.push(doc.data() as CricketMatch);
+      });
+
+      // Merge and sort by timestamp
+      const locals = getLocalMatches();
+      const all = [...fbMatches];
+      for (const lm of locals) {
+        if (!all.some(fm => fm.id === lm.id)) {
+          all.push(lm);
+        }
+      }
+      onUpdate(all.sort((a, b) => b.updatedAt - a.updatedAt));
+    }, (error) => {
+      console.warn("Error listening to all matches from Firestore, falling back to LocalStorage:", error);
+      const locals = getLocalMatches();
+      onUpdate(locals.sort((a, b) => b.updatedAt - a.updatedAt));
+    });
+
+    return unsub;
+  } catch (err) {
+    console.warn("Could not attach all matches listener:", err);
+    const locals = getLocalMatches();
+    onUpdate(locals.sort((a, b) => b.updatedAt - a.updatedAt));
+    return () => {};
+  }
+}
+
+// 10. Subscribe to daily attendance in real-time
+export function listenAttendance(
+  dateId: string,
+  onUpdate: (attendance: DailyAttendance | null) => void
+): () => void {
+  const localKey = `utrecht_ultimates_cricket_attendance_${dateId}`;
+
+  const getLocal = () => {
+    try {
+      const raw = localStorage.getItem(localKey);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  if (!isFirebaseEnabled || !db) {
+    onUpdate(getLocal());
+    const interval = setInterval(() => {
+      onUpdate(getLocal());
+    }, 2000);
+    return () => clearInterval(interval);
+  }
+
+  try {
+    const unsub = onSnapshot(doc(db, 'attendance', dateId), (snapshot) => {
+      if (snapshot.exists()) {
+        const remoteData = snapshot.data() as DailyAttendance;
+        // cache locally
+        localStorage.setItem(localKey, JSON.stringify(remoteData));
+        onUpdate(remoteData);
+      } else {
+        onUpdate(getLocal());
+      }
+    }, (error) => {
+      console.warn("Error listening to attendance from Firestore:", error);
+      onUpdate(getLocal());
+    });
+
+    return unsub;
+  } catch (err) {
+    console.warn("Could not attach attendance listener:", err);
+    onUpdate(getLocal());
+    return () => {};
+  }
+}
+
 
