@@ -45,6 +45,15 @@ service cloud.firestore {
         && (data.get('creatorId', null) == null || data.get('creatorId', null) is string);
     }
 
+    // Daily Attendance validation helper
+    function isValidAttendance(data) {
+      return data.get('id', '') is string
+        && data.get('id', '').size() <= 40
+        && data.get('players', []) is list
+        && (data.get('teamA', null) == null || data.get('teamA', null) is list)
+        && (data.get('teamB', null) == null || data.get('teamB', null) is list);
+    }
+
     // Strict Matches rules
     match /matches/{matchId} {
       // Any user (even unauthenticated) can read matches (both get and list)
@@ -64,6 +73,12 @@ service cloud.firestore {
 
       // Anyone can delete a match scorecard
       allow delete: if isValidId(matchId);
+    }
+
+    // Attendance rules
+    match /attendance/{dateId} {
+      allow read: if true;
+      allow write: if isValidId(dateId) && isValidAttendance(incoming());
     }
   }
 }

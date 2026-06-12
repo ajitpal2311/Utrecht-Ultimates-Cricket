@@ -78,12 +78,57 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "DailyAttendance": {
+      "title": "DailyAttendance",
+      "description": "Daily player attendance and pre-assigned teams for cricket matches on the same day",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The date in YYYY-MM-DD format"
+        },
+        "players": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of available players for the day"
+        },
+        "teamA": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Assigned players for Team A"
+        },
+        "teamB": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Assigned players for Team B"
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Timestamp of the last update"
+        }
+      },
+      "required": [
+        "id",
+        "players",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
     "/matches/{matchId}": {
       "schema": "CricketMatch",
       "description": "Full match telemetry and scorecards stored for real-time viewing and scoring."
+    },
+    "/attendance/{dateId}": {
+      "schema": "DailyAttendance",
+      "description": "Today's players attendance list and current configurations of Team A/B rosters."
     }
   }
 }

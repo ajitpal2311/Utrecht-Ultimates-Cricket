@@ -80,3 +80,12 @@ export interface CricketMatch {
   enableHalfwayRules?: boolean;
   creatorId?: string;
 }
+
+export interface DailyAttendance {
+  id: string; // "YYYY-MM-DD"
+  players: string[];
+  teamA?: string[];
+  teamB?: string[];
+  updatedAt: number;
+}
+

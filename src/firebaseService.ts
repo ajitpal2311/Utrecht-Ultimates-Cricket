@@ -1,6 +1,6 @@
 import { db, auth, isFirebaseEnabled, handleFirestoreError, OperationType, loginAnonymouslyIfNeeded } from './firebase';
 import { doc, setDoc, getDoc, getDocs, collection, onSnapshot, query, orderBy, deleteDoc } from 'firebase/firestore';
-import { CricketMatch } from './types';
+import { CricketMatch, DailyAttendance } from './types';
 
 const LOCAL_STORAGE_KEY = 'utrecht_ultimates_cricket_matches';
 
@@ -196,3 +196,58 @@ export async function deleteMatch(matchId: string): Promise<void> {
     }
   }
 }
+
+// 5. Fetch attendance for a specific date
+export async function fetchAttendance(dateId: string): Promise<DailyAttendance | null> {
+  const localKey = `utrecht_ultimates_cricket_attendance_${dateId}`;
+  
+  // Try remote first if Firebase is active
+  if (isFirebaseEnabled && db) {
+    try {
+      await loginAnonymouslyIfNeeded();
+      const docSnap = await getDoc(doc(db, 'attendance', dateId));
+      if (docSnap.exists()) {
+        const remoteData = docSnap.data() as DailyAttendance;
+        // Cache to local storage
+        localStorage.setItem(localKey, JSON.stringify(remoteData));
+        return remoteData;
+      }
+    } catch (error) {
+      console.error("Failed to fetch attendance from Firestore, checking local cache", error);
+    }
+  }
+
+  // Backup: read from local Storage
+  try {
+    const raw = localStorage.getItem(localKey);
+    return raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    console.error("Failed to read local attendance", err);
+    return null;
+  }
+}
+
+// 6. Save attendance for a specific date
+export async function saveAttendance(attendance: DailyAttendance): Promise<void> {
+  const localKey = `utrecht_ultimates_cricket_attendance_${attendance.id}`;
+  
+  // Write locally
+  try {
+    localStorage.setItem(localKey, JSON.stringify(attendance));
+  } catch (err) {
+    console.error("Failed to write local attendance", err);
+  }
+
+  // Write to Firestore if Firebase is active
+  if (isFirebaseEnabled && db) {
+    try {
+      await loginAnonymouslyIfNeeded();
+      const sanitized = sanitizeForFirestore(attendance);
+      await setDoc(doc(db, 'attendance', attendance.id), sanitized);
+      console.log("Attendance synced to Firestore successfully:", attendance.id);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `attendance/${attendance.id}`);
+    }
+  }
+}
+

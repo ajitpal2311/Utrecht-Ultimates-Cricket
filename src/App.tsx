@@ -33,7 +33,7 @@ import {
   ballsToOvers, 
   calculateRunRate 
 } from './matchEngine';
-import { saveMatch, fetchAllMatches, listenToMatch, deleteMatch } from './firebaseService';
+import { saveMatch, fetchAllMatches, listenToMatch, deleteMatch, saveAttendance, fetchAttendance } from './firebaseService';
 import { isFirebaseEnabled } from './firebase';
 
 export default function App() {
@@ -80,20 +80,36 @@ export default function App() {
 
   // Creation Form State
   const [matchName, setMatchName] = useState('Utrecht Champions League');
-  const [teamAName, setTeamAName] = useState('Utrecht Ultimates');
-  const [teamBName, setTeamBName] = useState('Amstelveen CC');
+  const [teamAName, setTeamAName] = useState('Team A');
+  const [teamBName, setTeamBName] = useState('Team B');
   const [oversCount, setOversCount] = useState<number>(5);
   const [playersLimit, setPlayersLimit] = useState<number>(11);
   const [enableHalfwayRules, setEnableHalfwayRules] = useState<boolean>(true);
   const [noBallPromptOpen, setNoBallPromptOpen] = useState<boolean>(false);
 
+  // Helper to generate a date key for daily attendance
+  const getTodayDateId = (): string => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  // Today's Attendance State
+  const [attendancePlayers, setAttendancePlayers] = useState<string[]>(['Andy', 'Ajit', 'Arindam', 'Bidhan', 'Sumit']);
+  const [attendanceInput, setAttendanceInput] = useState<string>('');
+  const [attendanceTeamA, setAttendanceTeamA] = useState<string[]>([]);
+  const [attendanceTeamB, setAttendanceTeamB] = useState<string[]>([]);
+
   // Squad setup state
   const [teamASquad, setTeamASquad] = useState<string[]>([]);
   const [teamBSquad, setTeamBSquad] = useState<string[]>([]);
 
-  // Intermediate setup choices
+  // Direct team player inputs
+  const [directInputA, setDirectInputA] = useState<string>('');
+  const [directInputB, setDirectInputB] = useState<string>('');
+
   const [tossWonBy, setTossWonBy] = useState<'A' | 'B' | null>(null);
   const [tossDecision, setTossDecision] = useState<'bat' | 'bowl' | null>(null);
+
 
   // Live Score screen helpers
   const [scoringExtrasMode, setScoringExtrasMode] = useState<'wd' | 'nb' | 'by' | 'lb' | null>(null);
@@ -101,7 +117,13 @@ export default function App() {
     showOptions: boolean;
     type: 'bowled' | 'caught' | 'run out' | 'lbw' | 'stumped' | 'other' | null;
     batsmanId: string | null;
-  }>({ showOptions: false, type: null, batsmanId: null });
+    incomingBatsmanId: string | null;
+  }>({ showOptions: false, type: null, batsmanId: null, incomingBatsmanId: null });
+
+  const [replacingBatterId, setReplacingBatterId] = useState<string | null>(null);
+  const [tempReplaceName, setTempReplaceName] = useState<string>('');
+  const [customIncomingName, setCustomIncomingName] = useState<string>('');
+  const [customWicketIncomingName, setCustomWicketIncomingName] = useState<string>('');
 
   const [activeScorecardTab, setActiveScorecardTab] = useState<'batting' | 'bowling' | 'summary'>('summary');
   const [showDetailedScorecard, setShowDetailedScorecard] = useState<boolean>(false);
@@ -130,6 +152,9 @@ export default function App() {
           matchId,
           (updatedMatch) => {
             setCurrentMatch(updatedMatch);
+            if (updatedMatch) {
+              extractSquadsAndTeamNames(updatedMatch);
+            }
             setLoading(false);
           },
           (err) => {
@@ -141,8 +166,35 @@ export default function App() {
       }
     };
 
+    const loadDailyAttendance = async () => {
+      const todayId = getTodayDateId();
+      try {
+        const todayAtt = await fetchAttendance(todayId);
+        if (todayAtt) {
+          setAttendancePlayers(todayAtt.players || []);
+          setAttendanceTeamA(todayAtt.teamA || []);
+          setAttendanceTeamB(todayAtt.teamB || []);
+        } else {
+          // Initialize with default demo list and save
+          const defaults = ['Andy', 'Ajit', 'Arindam', 'Bidhan', 'Sumit'];
+          setAttendancePlayers(defaults);
+          const prefill = {
+            id: todayId,
+            players: defaults,
+            teamA: [],
+            teamB: [],
+            updatedAt: Date.now()
+          };
+          await saveAttendance(prefill);
+        }
+      } catch (e) {
+        console.warn("Could not load daily attendance:", e);
+      }
+    };
+
     handleUrlLoading();
     loadAllMatches();
+    loadDailyAttendance();
   }, []);
 
   // Periodic match lookup for lists
@@ -170,22 +222,131 @@ export default function App() {
     }, 2800);
   };
 
-  // Create match action
-  const handleInitiateMatchCreation = () => {
-    triggerHapticFeedback();
-    const cleanMatch = createNewMatch(matchName, teamAName, teamBName, oversCount, playersLimit, null, enableHalfwayRules);
+  const handleAddAttendancePlayers = async (inputRaw: string) => {
+    if (!inputRaw || !inputRaw.trim()) return;
+    const names = inputRaw.split(',')
+      .map(n => n.trim())
+      .filter(n => n.length > 0);
     
-    // Generate default player names to save outdoor typing time
-    const initialASquad = Array.from({ length: playersLimit }, (_, i) => `Player ${i + 1}`);
-    const initialBSquad = Array.from({ length: playersLimit }, (_, i) => `Player ${i + 1}`);
+    const currentLower = attendancePlayers.map(p => p.toLowerCase());
+    const uniqueNew = names.filter(n => !currentLower.includes(n.toLowerCase()));
     
-    // Customize first 2 players to look realistic instantly
-    if (playersLimit >= 2) {
-      initialASquad[0] = 'S. de Witt';
-      initialASquad[1] = 'A. Pal';
-      initialBSquad[0] = 'H. van den Berg';
-      initialBSquad[1] = 'M. Jansen';
+    if (uniqueNew.length === 0) {
+      triggerToast("Names already in attendance / duplicate");
+      return;
     }
+
+    const updated = [...attendancePlayers, ...uniqueNew];
+    setAttendancePlayers(updated);
+    setAttendanceInput('');
+
+    const attendanceDoc = {
+      id: getTodayDateId(),
+      players: updated,
+      teamA: attendanceTeamA,
+      teamB: attendanceTeamB,
+      updatedAt: Date.now()
+    };
+    await saveAttendance(attendanceDoc);
+    triggerToast(`Added ${uniqueNew.length} players to Today's Attendance!`);
+  };
+
+  const handleRemoveAttendancePlayer = async (nameToRemove: string) => {
+    const updated = attendancePlayers.filter(p => p !== nameToRemove);
+    setAttendancePlayers(updated);
+
+    // Also remove from saved team rosters if they were in Team A or Team B
+    const updatedTeamA = attendanceTeamA.filter(p => p !== nameToRemove);
+    const updatedTeamB = attendanceTeamB.filter(p => p !== nameToRemove);
+    setAttendanceTeamA(updatedTeamA);
+    setAttendanceTeamB(updatedTeamB);
+
+    const attendanceDoc = {
+      id: getTodayDateId(),
+      players: updated,
+      teamA: updatedTeamA,
+      teamB: updatedTeamB,
+      updatedAt: Date.now()
+    };
+    await saveAttendance(attendanceDoc);
+    triggerToast(`Removed ${nameToRemove} from Today's Attendance`);
+  };
+
+  // Save squad changes helper
+  const handleSaveSquadChanges = async (newTeamA: string[], newTeamB: string[]) => {
+    const todayId = getTodayDateId();
+    setAttendanceTeamA(newTeamA);
+    setAttendanceTeamB(newTeamB);
+    const doc = {
+      id: todayId,
+      players: attendancePlayers,
+      teamA: newTeamA,
+      teamB: newTeamB,
+      updatedAt: Date.now()
+    };
+    await saveAttendance(doc);
+  };
+
+  // Create match action using Today's Attendance and matching assignments
+  const handleInitiateMatchCreation = async () => {
+    triggerHapticFeedback();
+
+    let initialASquad: string[] = [];
+    let initialBSquad: string[] = [];
+    let defaultTeamAName = 'Team A';
+    let defaultTeamBName = 'Team B';
+
+    // Use Today's Attendance as the player pool
+    const pool = attendancePlayers.length > 0 ? [...attendancePlayers] : ['Andy', 'Ajit', 'Arindam', 'Bidhan', 'Sumit'];
+
+    // If no teams exist yet today, automatically assign players randomly
+    if (attendanceTeamA.length === 0 && attendanceTeamB.length === 0) {
+      const shuffled = [...pool].sort(() => Math.random() - 0.5);
+      shuffled.forEach((player, index) => {
+        if (index % 2 === 0) {
+          initialASquad.push(player);
+        } else {
+          initialBSquad.push(player);
+        }
+      });
+
+      // Update and save Team A and B assignments back to Today's Attendance
+      setAttendanceTeamA(initialASquad);
+      setAttendanceTeamB(initialBSquad);
+      
+      const attendanceDoc = {
+        id: getTodayDateId(),
+        players: pool,
+        teamA: initialASquad,
+        teamB: initialBSquad,
+        updatedAt: Date.now()
+      };
+      await saveAttendance(attendanceDoc);
+      triggerToast("Created Team A & Team B automatically from Today's Attendance!");
+    } else {
+      // Reuse the previously created Team A and Team B assignments by default
+      initialASquad = [...attendanceTeamA];
+      initialBSquad = [...attendanceTeamB];
+      triggerToast("Reused same day Team A and Team B rosters!");
+    }
+
+    const finalTeamAName = teamAName.trim() || 'Team A';
+    const finalTeamBName = teamBName.trim() || 'Team B';
+
+    setTeamAName(finalTeamAName);
+    setTeamBName(finalTeamBName);
+
+    const maxPlayers = Math.max(initialASquad.length, initialBSquad.length, 2);
+
+    const cleanMatch = createNewMatch(
+      matchName, 
+      finalTeamAName, 
+      finalTeamBName, 
+      oversCount, 
+      maxPlayers, 
+      null, 
+      enableHalfwayRules
+    );
 
     setTeamASquad(initialASquad);
     setTeamBSquad(initialBSquad);
@@ -210,11 +371,6 @@ export default function App() {
     matchObj.tossDecision = tossDecision;
     matchObj.status = 'scoring';
 
-    // Figure out who is batting first in Inning 1
-    // If Team A wins and chooses Bat: A bats, B bowls
-    // If Team A wins and chooses Bowl: B bats, A bowls
-    // If Team B wins and chooses Bat: B bats, A bowls
-    // If Team B wins and chooses Bowl: A bats, B bowls
     let firstInningsBatting: 'A' | 'B' = 'A';
     if (tossWonBy === 'A') {
       firstInningsBatting = tossDecision === 'bat' ? 'A' : 'B';
@@ -261,42 +417,169 @@ export default function App() {
   };
 
   // Quick Inline Squad Name editor helper
-  const handleEditPlayerName = (team: 'A' | 'B', index: number, value: string) => {
+  const handleEditPlayerName = async (team: 'A' | 'B', index: number, value: string) => {
+    let updated: string[];
+    const todayId = getTodayDateId();
     if (team === 'A') {
-      const updated = [...teamASquad];
+      updated = [...teamASquad];
+      const oldVal = updated[index];
       updated[index] = value;
       setTeamASquad(updated);
+      
+      // Sync with attendance list
+      let updatedAtt = [...attendancePlayers];
+      const attIdx = updatedAtt.indexOf(oldVal);
+      if (attIdx !== -1 && !updatedAtt.includes(value)) {
+        updatedAtt[attIdx] = value;
+        setAttendancePlayers(updatedAtt);
+      }
+      
+      setAttendanceTeamA(updated);
+      const doc = {
+        id: todayId,
+        players: updatedAtt,
+        teamA: updated,
+        teamB: teamBSquad,
+        updatedAt: Date.now()
+      };
+      await saveAttendance(doc);
     } else {
-      const updated = [...teamBSquad];
+      updated = [...teamBSquad];
+      const oldVal = updated[index];
       updated[index] = value;
       setTeamBSquad(updated);
+      
+      // Sync with attendance list
+      let updatedAtt = [...attendancePlayers];
+      const attIdx = updatedAtt.indexOf(oldVal);
+      if (attIdx !== -1 && !updatedAtt.includes(value)) {
+        updatedAtt[attIdx] = value;
+        setAttendancePlayers(updatedAtt);
+      }
+      
+      setAttendanceTeamB(updated);
+      const doc = {
+        id: todayId,
+        players: updatedAtt,
+        teamA: teamASquad,
+        teamB: updated,
+        updatedAt: Date.now()
+      };
+      await saveAttendance(doc);
     }
   };
 
-  const handleAddPlayerSlot = (team: 'A' | 'B') => {
+  const handleAddPlayerSlot = async (team: 'A' | 'B') => {
     triggerHapticFeedback();
+    const nextNum = (team === 'A' ? teamASquad.length : teamBSquad.length) + 1;
+    const defaultName = `Player ${nextNum}`;
+    
+    // Auto add to Today's Attendance
+    let updatedAtt = [...attendancePlayers];
+    if (!updatedAtt.includes(defaultName)) {
+      updatedAtt.push(defaultName);
+      setAttendancePlayers(updatedAtt);
+    }
+
     if (team === 'A') {
-      setTeamASquad([...teamASquad, `Player ${teamASquad.length + 1}`]);
+      const updated = [...teamASquad, defaultName];
+      setTeamASquad(updated);
+      await handleSaveSquadChanges(updated, teamBSquad);
     } else {
-      setTeamBSquad([...teamBSquad, `Player ${teamBSquad.length + 1}`]);
+      const updated = [...teamBSquad, defaultName];
+      setTeamBSquad(updated);
+      await handleSaveSquadChanges(teamASquad, updated);
     }
   };
 
-  const handleRemovePlayerSlot = (team: 'A' | 'B', index: number) => {
+  const handleRemovePlayerSlot = async (team: 'A' | 'B', index: number) => {
     triggerHapticFeedback();
     if (team === 'A') {
       if (teamASquad.length <= 2) {
         triggerToast("Minimum 2 players needed");
         return;
       }
-      setTeamASquad(teamASquad.filter((_, idx) => idx !== index));
+      const updated = teamASquad.filter((_, idx) => idx !== index);
+      setTeamASquad(updated);
+      await handleSaveSquadChanges(updated, teamBSquad);
     } else {
       if (teamBSquad.length <= 2) {
         triggerToast("Minimum 2 players needed");
         return;
       }
-      setTeamBSquad(teamBSquad.filter((_, idx) => idx !== index));
+      const updated = teamBSquad.filter((_, idx) => idx !== index);
+      setTeamBSquad(updated);
+      await handleSaveSquadChanges(teamASquad, updated);
     }
+  };
+
+  // Move a player between A and B
+  const handleMovePlayerColumn = async (fromTeam: 'A' | 'B', index: number) => {
+    triggerHapticFeedback();
+    if (fromTeam === 'A') {
+      const player = teamASquad[index];
+      const updatedA = teamASquad.filter((_, idx) => idx !== index);
+      const updatedB = [...teamBSquad, player];
+      setTeamASquad(updatedA);
+      setTeamBSquad(updatedB);
+      await handleSaveSquadChanges(updatedA, updatedB);
+      triggerToast(`Moved ${player} to ${teamBName}`);
+    } else {
+      const player = teamBSquad[index];
+      const updatedB = teamBSquad.filter((_, idx) => idx !== index);
+      const updatedA = [...teamASquad, player];
+      setTeamASquad(updatedA);
+      setTeamBSquad(updatedB);
+      await handleSaveSquadChanges(updatedA, updatedB);
+      triggerToast(`Moved ${player} to ${teamAName}`);
+    }
+  };
+
+  // Add custom player directly to a team and auto sync with attendance
+  const handleAddPlayerToTeamDirect = async (team: 'A' | 'B', rawName: string) => {
+    if (!rawName || !rawName.trim()) return;
+    triggerHapticFeedback();
+    const cleanName = rawName.trim();
+
+    let updatedA = [...teamASquad];
+    let updatedB = [...teamBSquad];
+
+    // Check pre-existence in roster
+    if (updatedA.includes(cleanName) || updatedB.includes(cleanName)) {
+      triggerToast("Player is already in one of the teams");
+      return;
+    }
+
+    if (team === 'A') {
+      updatedA.push(cleanName);
+      setTeamASquad(updatedA);
+    } else {
+      updatedB.push(cleanName);
+      setTeamBSquad(updatedB);
+    }
+
+    // Auto-add to attendance players (ignore duplicates)
+    let updatedAtt = [...attendancePlayers];
+    const lowerAtt = updatedAtt.map(p => p.toLowerCase());
+    if (!lowerAtt.includes(cleanName.toLowerCase())) {
+      updatedAtt.push(cleanName);
+      setAttendancePlayers(updatedAtt);
+    }
+
+    // Save of both states to Firestore/LocalStorage
+    const todayId = getTodayDateId();
+    setAttendanceTeamA(updatedA);
+    setAttendanceTeamB(updatedB);
+
+    const doc = {
+      id: todayId,
+      players: updatedAtt,
+      teamA: updatedA,
+      teamB: updatedB,
+      updatedAt: Date.now()
+    };
+    await saveAttendance(doc);
+    triggerToast(`Added ${cleanName} to ${team === 'A' ? teamAName : teamBName} & Today's Attendance`);
   };
 
   // Perform Wide Scoring
@@ -440,7 +723,51 @@ export default function App() {
       wicketConfig.batsmanId
     );
 
-    setWicketConfig({ showOptions: false, type: null, batsmanId: null });
+    let finalIncomingId = wicketConfig.incomingBatsmanId;
+
+    // Create a new customized batter on the fly, if typed in
+    if (customWicketIncomingName.trim()) {
+      const cleanName = customWicketIncomingName.trim();
+      const activeInningsIdx = updated.currentInningsIndex;
+      const inn = activeInningsIdx === 1 ? updated.innings1 : updated.innings2;
+      if (inn) {
+        if (!inn.battingOrder.some(p => p.name.toLowerCase() === cleanName.toLowerCase())) {
+          const battingTeam = inn.battingTeamId;
+          finalIncomingId = `p-${battingTeam}-custom-${Date.now()}`;
+          const newPlayer = {
+            id: finalIncomingId,
+            name: cleanName,
+            runs: 0,
+            balls: 0,
+            fours: 0,
+            sixes: 0,
+            out: false
+          };
+          inn.battingOrder.push(newPlayer);
+        } else {
+          const existing = inn.battingOrder.find(p => p.name.toLowerCase() === cleanName.toLowerCase());
+          if (existing) finalIncomingId = existing.id;
+        }
+      }
+    }
+
+    // Auto-assign chosen incoming batsman
+    if (finalIncomingId) {
+      const activeInningsIdx = updated.currentInningsIndex;
+      const inn = activeInningsIdx === 1 ? updated.innings1 : updated.innings2;
+      if (inn) {
+        if (!inn.currentBatter1Id) {
+          inn.currentBatter1Id = finalIncomingId;
+          if (!inn.strikerId) inn.strikerId = finalIncomingId;
+        } else if (!inn.currentBatter2Id) {
+          inn.currentBatter2Id = finalIncomingId;
+          if (!inn.strikerId) inn.strikerId = finalIncomingId;
+        }
+      }
+    }
+
+    setWicketConfig({ showOptions: false, type: null, batsmanId: null, incomingBatsmanId: null });
+    setCustomWicketIncomingName('');
     setCurrentMatch(updated);
     await saveMatch(updated);
 
@@ -450,7 +777,11 @@ export default function App() {
     } else if (updated.currentInningsIndex !== currentMatch.currentInningsIndex) {
       initializeInnings2(updated);
     } else {
-      triggerToast("🎯 Wicket recorded! Pick the incoming batsman card below.");
+      if (finalIncomingId) {
+        triggerToast("🎯 Wicket recorded and next batsman assigned!");
+      } else {
+        triggerToast("🎯 Wicket recorded! Pick the incoming batsman card below.");
+      }
     }
   };
 
@@ -548,27 +879,24 @@ export default function App() {
     triggerToast(`🥎 Bowler is now: ${bowlerName}`);
   };
 
-  // Quick Batsman replacement selector (when a batter gets out)
-  const handleAssignIncomingBatsman = async (playerIdx: number) => {
+  // Dynamic Batsman replacement by ID (flexible batting order)
+  const handleAssignIncomingBatsmanById = async (playerId: string) => {
     if (!currentMatch) return;
     const activeInnings = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
     if (!activeInnings) return;
 
     triggerHapticFeedback();
-    const battingTeam = activeInnings.battingTeamId;
-    const bId = `p-${battingTeam}-${playerIdx + 1}`;
-
     const updatedMatch = { ...currentMatch };
     const inn = updatedMatch.currentInningsIndex === 1 ? updatedMatch.innings1 : updatedMatch.innings2;
 
     if (inn) {
       // Find where we have a slot available
-      if (!inn.currentBatter1Id && inn.currentBatter2Id !== bId) {
-        inn.currentBatter1Id = bId;
-        if (!inn.strikerId) inn.strikerId = bId;
-      } else if (!inn.currentBatter2Id && inn.currentBatter1Id !== bId) {
-        inn.currentBatter2Id = bId;
-        if (!inn.strikerId) inn.strikerId = bId;
+      if (!inn.currentBatter1Id && inn.currentBatter2Id !== playerId) {
+        inn.currentBatter1Id = playerId;
+        if (!inn.strikerId) inn.strikerId = playerId;
+      } else if (!inn.currentBatter2Id && inn.currentBatter1Id !== playerId) {
+        inn.currentBatter2Id = playerId;
+        if (!inn.strikerId) inn.strikerId = playerId;
       } else {
         triggerToast("Batsmen spots are already filled!");
         return;
@@ -578,6 +906,120 @@ export default function App() {
     setCurrentMatch(updatedMatch);
     await saveMatch(updatedMatch);
     triggerToast("🏏 New batsman assigned!");
+  };
+
+  // Quick Batsman replacement selector (kept for backward compatibility, delegates to ID-based)
+  const handleAssignIncomingBatsman = async (playerIdx: number) => {
+    if (!currentMatch) return;
+    const activeInnings = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
+    if (!activeInnings) return;
+    const battingTeam = activeInnings.battingTeamId;
+    const bId = `p-${battingTeam}-${playerIdx + 1}`;
+    await handleAssignIncomingBatsmanById(bId);
+  };
+
+  // Register completely new batsman on key-press/click
+  const handleAddCustomIncomingBatsman = async () => {
+    if (!currentMatch || !customIncomingName.trim()) return;
+    const activeInnings = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
+    if (!activeInnings) return;
+
+    triggerHapticFeedback();
+    const cleanName = customIncomingName.trim();
+    const battingTeam = activeInnings.battingTeamId;
+    const newPlayerId = `p-${battingTeam}-custom-${Date.now()}`;
+
+    const updatedMatch = { ...currentMatch };
+    const inn = updatedMatch.currentInningsIndex === 1 ? updatedMatch.innings1 : updatedMatch.innings2;
+
+    if (inn) {
+      // Ensure name is not empty or duplicate
+      if (inn.battingOrder.some(p => p.name.toLowerCase() === cleanName.toLowerCase())) {
+        triggerToast("A player with this name already exists in the scorecard!");
+        return;
+      }
+
+      // Create and push new player to scorecard
+      const newPlayer = {
+        id: newPlayerId,
+        name: cleanName,
+        runs: 0,
+        balls: 0,
+        fours: 0,
+        sixes: 0,
+        out: false
+      };
+      inn.battingOrder.push(newPlayer);
+
+      // Assign to empty slot
+      if (!inn.currentBatter1Id) {
+        inn.currentBatter1Id = newPlayerId;
+        if (!inn.strikerId) inn.strikerId = newPlayerId;
+      } else if (!inn.currentBatter2Id) {
+        inn.currentBatter2Id = newPlayerId;
+        if (!inn.strikerId) inn.strikerId = newPlayerId;
+      } else {
+        triggerToast("Batsmen spots are already filled!");
+        return;
+      }
+    }
+
+    setCurrentMatch(updatedMatch);
+    await saveMatch(updatedMatch);
+    triggerToast(`🏏 Added & assigned custom batsman: ${cleanName}`);
+    setCustomIncomingName('');
+  };
+
+  // Switch active batsman on the fly at any time (e.g., retirement, opening switch, substitution)
+  const handleSubstituteActiveBatsman = async (oldBatterId: string, newBatterId: string, newCustomName?: string) => {
+    if (!currentMatch) return;
+    const activeInnings = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
+    if (!activeInnings) return;
+
+    triggerHapticFeedback();
+    const updatedMatch = { ...currentMatch };
+    const inn = updatedMatch.currentInningsIndex === 1 ? updatedMatch.innings1 : updatedMatch.innings2;
+
+    if (inn) {
+      let finalNewId = newBatterId;
+      
+      // If we are adding a custom named player
+      if (newCustomName && newCustomName.trim()) {
+        const cleanName = newCustomName.trim();
+        const battingTeam = inn.battingTeamId;
+        finalNewId = `p-${battingTeam}-custom-${Date.now()}`;
+        
+        // Add them to the battingOrder
+        const newPlayer = {
+          id: finalNewId,
+          name: cleanName,
+          runs: 0,
+          balls: 0,
+          fours: 0,
+          sixes: 0,
+          out: false
+        };
+        inn.battingOrder.push(newPlayer);
+      }
+
+      // Reassign active slot and striker if applicable
+      if (inn.currentBatter1Id === oldBatterId) {
+        inn.currentBatter1Id = finalNewId;
+        if (inn.strikerId === oldBatterId) {
+          inn.strikerId = finalNewId;
+        }
+      } else if (inn.currentBatter2Id === oldBatterId) {
+        inn.currentBatter2Id = finalNewId;
+        if (inn.strikerId === oldBatterId) {
+          inn.strikerId = finalNewId;
+        }
+      }
+    }
+
+    setCurrentMatch(updatedMatch);
+    await saveMatch(updatedMatch);
+    triggerToast("🏏 Active batsman changed successfully!");
+    setReplacingBatterId(null);
   };
 
   // Toggle Strike manual swap (One Tap)
@@ -643,10 +1085,67 @@ export default function App() {
     );
   };
 
+  const extractSquadsAndTeamNames = (matchObj: CricketMatch) => {
+    if (!matchObj) return;
+    setTeamAName(matchObj.teamAName);
+    setTeamBName(matchObj.teamBName);
+    
+    const squadA: string[] = [];
+    const squadB: string[] = [];
+
+    if (matchObj.innings1) {
+      const inn1 = matchObj.innings1;
+      const batId = inn1.battingTeamId;
+      const bowlId = inn1.bowlingTeamId;
+
+      inn1.battingOrder.forEach(p => {
+        if (batId === 'A') {
+          if (!squadA.includes(p.name)) squadA.push(p.name);
+        } else {
+          if (!squadB.includes(p.name)) squadB.push(p.name);
+        }
+      });
+
+      inn1.bowlingOrder.forEach(b => {
+        if (bowlId === 'A') {
+          if (!squadA.includes(b.name)) squadA.push(b.name);
+        } else {
+          if (!squadB.includes(b.name)) squadB.push(b.name);
+        }
+      });
+    }
+
+    if (matchObj.innings2) {
+      const inn2 = matchObj.innings2;
+      const batId = inn2.battingTeamId;
+      const bowlId = inn2.bowlingTeamId;
+
+      inn2.battingOrder.forEach(p => {
+        if (batId === 'A') {
+          if (!squadA.includes(p.name)) squadA.push(p.name);
+        } else {
+          if (!squadB.includes(p.name)) squadB.push(p.name);
+        }
+      });
+
+      inn2.bowlingOrder.forEach(b => {
+        if (bowlId === 'A') {
+          if (!squadA.includes(b.name)) squadA.push(b.name);
+        } else {
+          if (!squadB.includes(b.name)) squadB.push(b.name);
+        }
+      });
+    }
+
+    if (squadA.length > 0) setTeamASquad(squadA);
+    if (squadB.length > 0) setTeamBSquad(squadB);
+  };
+
   // Load an existing match to score again
   const handleLoadMatchToScore = (matchObj: CricketMatch) => {
     triggerHapticFeedback();
     setCurrentMatch(matchObj);
+    extractSquadsAndTeamNames(matchObj);
     
     // Retrieve player arrays from name matching
     setCurrentView('scoring');
@@ -679,9 +1178,6 @@ export default function App() {
             <h1 className="text-xl md:text-2xl font-display font-bold tracking-tight">
               Utrecht Ultimates Cricket
             </h1>
-            <p className="text-[10px] uppercase tracking-widest font-semibold opacity-80">
-              Outdoor Scoring MVP
-            </p>
           </div>
         </div>
 
@@ -737,18 +1233,87 @@ export default function App() {
             className="space-y-6"
             id="home-screen"
           >
-            {/* Quick banner welcoming outdoor users */}
-            <div className={`p-5 rounded-2xl border flex flex-col md:flex-row items-center justify-between gap-4 select-none ${
+
+            {/* Today's Attendance Card */}
+            <div className={`p-5 rounded-2xl border space-y-4 select-none ${
               isSunlight 
                 ? 'bg-white border-slate-300 shadow-sm' 
                 : 'bg-slate-900 border-slate-800 shadow-xl'
-            }`}>
-              <div className="space-y-1">
-                <span className="text-[12px] font-mono tracking-widest text-emerald-500 font-bold">OUTDOOR OPTIMISED</span>
-                <h2 className="text-2xl font-bold font-display leading-tight">Sunlight Friendly Scorekeeper</h2>
-                <p className="text-sm opacity-70">Perfect for scoring quick weekend club overs with friends on damp Dutch pitches.</p>
+            }`} id="todays-attendance-container">
+              <div className="flex items-center justify-between border-b pb-3 border-dashed border-slate-205 dark:border-slate-800">
+                <div className="flex items-center gap-2">
+                  <span className="p-1.5 bg-emerald-100 dark:bg-emerald-950/50 rounded-lg text-emerald-600 dark:text-emerald-400">
+                    <Users className="w-5 h-5" />
+                  </span>
+                  <div>
+                    <h3 className="text-lg font-bold font-display leading-tight">Today’s Attendance</h3>
+                    <p className="text-xs opacity-60">Manage today's checked-in player pool</p>
+                  </div>
+                </div>
+                <span className={`text-xs px-2.5 py-1 rounded-full font-bold uppercase tracking-wider ${
+                  isSunlight ? 'bg-emerald-50 text-emerald-700' : 'bg-emerald-950/40 text-emerald-400'
+                }`}>
+                  {attendancePlayers.length} Checked In
+                </span>
               </div>
-              <span className="text-4xl">🌤️🏏</span>
+
+              {/* Attendance player chips grid */}
+              {attendancePlayers.length === 0 ? (
+                <div className="text-center py-6 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
+                  <p className="text-sm opacity-60">No players checked in yet.</p>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-1 py-1 px-1">
+                  {attendancePlayers.map((name) => (
+                    <div 
+                      key={name}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all group/chip ${
+                        isSunlight 
+                          ? 'bg-slate-100 text-slate-800 hover:bg-red-50 hover:text-red-800' 
+                          : 'bg-slate-800 text-slate-200 hover:bg-slate-750 hover:text-red-300'
+                      }`}
+                    >
+                      <span className="truncate max-w-[120px]">{name}</span>
+                      <button 
+                        onClick={() => handleRemoveAttendancePlayer(name)}
+                        className="p-0.5 rounded-full hover:bg-black/10 dark:hover:bg-white/15 focus:outline-none transition-colors"
+                        aria-label={`Remove ${name}`}
+                      >
+                        <X className="w-3.5 h-3.5 opacity-60 group-hover/chip:opacity-100" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Add Players inputs section */}
+              <div className="flex gap-2 pt-1">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    value={attendanceInput}
+                    onChange={(e) => setAttendanceInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleAddAttendancePlayers(attendanceInput);
+                      }
+                    }}
+                    placeholder="Add players (comma-separated, e.g. Andy, Ajit)"
+                    className={`w-full px-4 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                      isSunlight 
+                        ? 'bg-slate-50 border-slate-300 text-slate-900 placeholder:text-slate-400 focus:bg-white' 
+                        : 'bg-slate-950 border-slate-800 text-slate-100 placeholder:text-slate-600 focus:bg-slate-900'
+                    }`}
+                  />
+                </div>
+                <button
+                  onClick={() => handleAddAttendancePlayers(attendanceInput)}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 active:scale-97 text-white font-medium text-sm rounded-xl transition-all shadow-sm flex items-center gap-1 shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add</span>
+                </button>
+              </div>
             </div>
 
             {/* Core Grid Cards */}
@@ -1108,6 +1673,70 @@ export default function App() {
               </button>
             </div>
 
+            {/* UNASSIGNED PLAYERS SECTION */}
+            {(() => {
+              const unassignedPlayers = attendancePlayers.filter(
+                p => !teamASquad.includes(p) && !teamBSquad.includes(p)
+              );
+              return unassignedPlayers.length > 0 ? (
+                <div className={`p-5 rounded-xl border space-y-3 ${
+                  isSunlight ? 'bg-emerald-50/20 border-emerald-200' : 'bg-slate-900 border-slate-800'
+                }`}>
+                  <div className="flex justify-between items-center pb-1">
+                    <div className="flex items-center gap-2">
+                      <span className="p-1.5 bg-emerald-100 dark:bg-emerald-950/40 rounded text-emerald-600 dark:text-emerald-400">
+                        <Users className="w-4 h-4" />
+                      </span>
+                      <div>
+                        <h3 className="font-bold font-display text-sm leading-tight">Unassigned Checked-In Players ({unassignedPlayers.length})</h3>
+                        <p className="text-[10px] opacity-60">Today's checked-in players not yet assigned to any team roster</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1 max-h-40 overflow-y-auto">
+                    {unassignedPlayers.map(p => (
+                      <div 
+                        key={p} 
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                          isSunlight ? 'bg-slate-100 border border-slate-200 text-slate-800' : 'bg-slate-800 text-slate-200'
+                        }`}
+                      >
+                        <span className="font-bold">{p}</span>
+                        <div className="flex items-center gap-1.5 border-l pl-2 border-slate-300 dark:border-slate-700">
+                          <button
+                            onClick={() => {
+                              triggerHapticFeedback();
+                              const updatedA = [...teamASquad, p];
+                              setTeamASquad(updatedA);
+                              handleSaveSquadChanges(updatedA, teamBSquad);
+                              triggerToast(`Assigned ${p} to ${teamAName}`);
+                            }}
+                            className="px-1.5 py-0.5 rounded bg-sky-600 hover:bg-sky-500 text-white font-black text-[10px] transition-colors"
+                            title={`Assign to ${teamAName}`}
+                          >
+                            + A
+                          </button>
+                          <button
+                            onClick={() => {
+                              triggerHapticFeedback();
+                              const updatedB = [...teamBSquad, p];
+                              setTeamBSquad(updatedB);
+                              handleSaveSquadChanges(teamASquad, updatedB);
+                              triggerToast(`Assigned ${p} to ${teamBName}`);
+                            }}
+                            className="px-1.5 py-0.5 rounded bg-rose-600 hover:bg-rose-500 text-white font-black text-[10px] transition-colors"
+                            title={`Assign to ${teamBName}`}
+                          >
+                            + B
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null;
+            })()}
+
             {/* Squad lists */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               
@@ -1133,8 +1762,15 @@ export default function App() {
                         className="flex-1 p-2 text-sm border rounded bg-slate-50 dark:bg-slate-800 dark:border-slate-700 font-bold text-slate-850 dark:text-slate-105"
                       />
                       <button
+                        onClick={() => handleMovePlayerColumn('A', idx)}
+                        className="p-2 text-sky-500 hover:bg-sky-100 dark:hover:bg-slate-800 rounded transition-colors"
+                        title="Move to Team B"
+                      >
+                        <ArrowRightLeft className="w-4 h-4" />
+                      </button>
+                      <button
                         onClick={() => handleRemovePlayerSlot('A', idx)}
-                        className="p-2 text-rose-500 hover:bg-rose-500/10 rounded"
+                        className="p-2 text-rose-500 hover:bg-rose-500/10 rounded transition-colors"
                         title="Remove Player"
                       >
                         <X className="w-4 h-4" />
@@ -1143,12 +1779,44 @@ export default function App() {
                   ))}
                 </div>
 
-                <button
-                  onClick={() => handleAddPlayerSlot('A')}
-                  className="w-full py-2 bg-slate-100 dark:bg-slate-800 border-2 border-dashed border-slate-300 dark:border-slate-700 hover:bg-slate-200 rounded-lg text-xs font-bold flex items-center justify-center gap-1"
-                >
-                  <Plus className="w-4 h-4" /> Add Player Custom Slot
-                </button>
+                <div className="space-y-2 pt-2 border-t border-dashed border-slate-200 dark:border-slate-800">
+                  <button
+                    onClick={() => handleAddPlayerSlot('A')}
+                    className="w-full py-2 bg-slate-100 dark:bg-slate-800 border-2 border-dashed border-slate-300 dark:border-slate-700 hover:bg-slate-200 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+                  >
+                    <Plus className="w-4 h-4" /> Add Player Custom Slot
+                  </button>
+
+                  {/* Direct add field */}
+                  <div className="flex gap-2 pt-1">
+                    <input
+                      type="text"
+                      value={directInputA}
+                      onChange={(e) => setDirectInputA(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleAddPlayerToTeamDirect('A', directInputA);
+                          setDirectInputA('');
+                        }
+                      }}
+                      placeholder="Add player directly to Team A..."
+                      className={`flex-1 px-3 py-1.5 rounded-lg border text-xs focus:outline-none focus:ring-1 focus:ring-sky-500 ${
+                        isSunlight 
+                          ? 'bg-slate-50 border-slate-300 text-slate-900 focus:bg-white' 
+                          : 'bg-slate-950 border-slate-800 text-slate-105 focus:bg-slate-900'
+                      }`}
+                    />
+                    <button
+                      onClick={() => {
+                        handleAddPlayerToTeamDirect('A', directInputA);
+                        setDirectInputA('');
+                      }}
+                      className="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold rounded-lg shrink-0 transition"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
               </div>
 
               {/* TEAM B SQUAD */}
@@ -1173,8 +1841,15 @@ export default function App() {
                         className="flex-1 p-2 text-sm border rounded bg-slate-50 dark:bg-slate-800 dark:border-slate-700 font-bold text-slate-850 dark:text-slate-105"
                       />
                       <button
+                        onClick={() => handleMovePlayerColumn('B', idx)}
+                        className="p-2 text-sky-500 hover:bg-sky-100 dark:hover:bg-slate-800 rounded transition-colors"
+                        title="Move to Team A"
+                      >
+                        <ArrowRightLeft className="w-4 h-4" />
+                      </button>
+                      <button
                         onClick={() => handleRemovePlayerSlot('B', idx)}
-                        className="p-2 text-rose-500 hover:bg-rose-500/10 rounded"
+                        className="p-2 text-rose-500 hover:bg-rose-500/10 rounded transition-colors"
                         title="Remove Player"
                       >
                         <X className="w-4 h-4" />
@@ -1183,12 +1858,44 @@ export default function App() {
                   ))}
                 </div>
 
-                <button
-                  onClick={() => handleAddPlayerSlot('B')}
-                  className="w-full py-2 bg-slate-100 dark:bg-slate-800 border-2 border-dashed border-slate-300 dark:border-slate-700 hover:bg-slate-200 rounded-lg text-xs font-bold flex items-center justify-center gap-1"
-                >
-                  <Plus className="w-4 h-4" /> Add Player Custom Slot
-                </button>
+                <div className="space-y-2 pt-2 border-t border-dashed border-slate-200 dark:border-slate-800">
+                  <button
+                    onClick={() => handleAddPlayerSlot('B')}
+                    className="w-full py-2 bg-slate-100 dark:bg-slate-800 border-2 border-dashed border-slate-300 dark:border-slate-700 hover:bg-slate-200 rounded-lg text-xs font-bold flex items-center justify-center gap-1 transition-colors"
+                  >
+                    <Plus className="w-4 h-4" /> Add Player Custom Slot
+                  </button>
+
+                  {/* Direct add field */}
+                  <div className="flex gap-2 pt-1">
+                    <input
+                      type="text"
+                      value={directInputB}
+                      onChange={(e) => setDirectInputB(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleAddPlayerToTeamDirect('B', directInputB);
+                          setDirectInputB('');
+                        }
+                      }}
+                      placeholder="Add player directly to Team B..."
+                      className={`flex-1 px-3 py-1.5 rounded-lg border text-xs focus:outline-none focus:ring-1 focus:ring-rose-500 ${
+                        isSunlight 
+                          ? 'bg-slate-50 border-slate-300 text-slate-900 focus:bg-white' 
+                          : 'bg-slate-950 border-slate-800 text-slate-105 focus:bg-slate-900'
+                      }`}
+                    />
+                    <button
+                      onClick={() => {
+                        handleAddPlayerToTeamDirect('B', directInputB);
+                        setDirectInputB('');
+                      }}
+                      className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-lg shrink-0 transition"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
               </div>
 
             </div>
@@ -1512,37 +2219,103 @@ export default function App() {
                     <div className="space-y-2 select-none">
                       {/* BATTER 1 CARD CARD */}
                       {b1 ? (
-                        <div 
-                          onClick={() => {
-                            triggerHapticFeedback();
-                            const innRef = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
-                            if (innRef) {
-                              innRef.strikerId = b1.id;
-                              setCurrentMatch({ ...currentMatch });
-                              triggerToast(`⭐️ ${b1.name} is on strike`);
-                            }
-                          }}
-                          className={`p-3 rounded-xl border-2 flex items-center justify-between cursor-pointer transition-all ${
-                            inn.strikerId === b1.id 
-                              ? 'bg-amber-400 border-amber-500 text-slate-950 scale-101 shadow-sm font-extrabold' 
-                              : 'border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-850'
-                          }`}
-                          id={`batsman-row-${b1.id}`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="text-xl">
-                              {inn.strikerId === b1.id ? '⭐️' : '🏏'}
-                            </span>
-                            <div>
-                              <p className="font-bold truncate text-base">{b1.name}</p>
-                              <span className="text-xs opacity-60">Striker click to change</span>
+                        <div className="space-y-2">
+                          <div 
+                            onClick={() => {
+                              triggerHapticFeedback();
+                              const innRef = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
+                              if (innRef) {
+                                innRef.strikerId = b1.id;
+                                setCurrentMatch({ ...currentMatch });
+                                triggerToast(`⭐️ ${b1.name} is on strike`);
+                              }
+                            }}
+                            className={`p-3 rounded-xl border-2 flex items-center justify-between cursor-pointer transition-all ${
+                              inn.strikerId === b1.id 
+                                ? 'bg-amber-400 border-amber-500 text-slate-950 scale-101 shadow-sm font-extrabold' 
+                                : 'border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-850'
+                            }`}
+                            id={`batsman-row-${b1.id}`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-xl">
+                                {inn.strikerId === b1.id ? '⭐️' : '🏏'}
+                              </span>
+                              <div>
+                                <p className="font-bold truncate text-base">{b1.name}</p>
+                                <span className="text-xs opacity-60">Striker click to change</span>
+                              </div>
+                            </div>
+                            
+                            <div className="text-right font-mono flex items-center gap-3">
+                              <div>
+                                <p className="text-xl font-bold">{b1.runs} <span className="text-xs font-normal">({b1.balls})</span></p>
+                                <p className="text-[10px] opacity-60">4s: {b1.fours} • 6s: {b1.sixes}</p>
+                              </div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setReplacingBatterId(replacingBatterId === b1.id ? null : b1.id);
+                                }}
+                                className="p-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-755 text-indigo-600 rounded-lg text-xs font-extrabold flex items-center justify-center border dark:border-slate-700"
+                                title="Change or Substitute this batsman"
+                              >
+                                🔄
+                              </button>
                             </div>
                           </div>
-                          
-                          <div className="text-right font-mono">
-                            <p className="text-xl font-bold">{b1.runs} <span className="text-xs font-normal">({b1.balls})</span></p>
-                            <p className="text-[10px] opacity-60">4s: {b1.fours} • 6s: {b1.sixes}</p>
-                          </div>
+
+                          {/* Inline Substitution menu */}
+                          {replacingBatterId === b1.id && (
+                            <div className="p-3 bg-indigo-50/50 dark:bg-slate-850 border border-indigo-100 dark:border-slate-805 rounded-xl space-y-2 text-slate-900 dark:text-white" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs font-black text-indigo-600 block uppercase">Substitute {b1.name} with:</span>
+                                <button onClick={() => setReplacingBatterId(null)} className="text-[10px] font-bold text-slate-500 hover:underline">Close</button>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 max-h-[100px] overflow-y-auto">
+                                {inn.battingOrder
+                                  .filter(p => !p.out && p.id !== b1.id && p.id !== inn.currentBatter2Id)
+                                  .map(p => (
+                                    <button
+                                      key={p.id}
+                                      onClick={() => handleSubstituteActiveBatsman(b1.id, p.id)}
+                                      className="px-2 py-1 text-xs bg-white dark:bg-slate-800 hover:bg-indigo-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-md font-bold text-slate-800 dark:text-slate-100"
+                                    >
+                                      {p.name}
+                                    </button>
+                                  ))
+                                }
+                              </div>
+                              <div className="flex gap-1.5 pt-1">
+                                <input
+                                  type="text"
+                                  placeholder="Or type custom player name..."
+                                  value={tempReplaceName}
+                                  onChange={(e) => setTempReplaceName(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && tempReplaceName.trim()) {
+                                      handleSubstituteActiveBatsman(b1.id, '', tempReplaceName.trim());
+                                      setTempReplaceName('');
+                                    }
+                                  }}
+                                  className={`flex-1 px-2.5 py-1 text-xs rounded-md border focus:outline-none ${
+                                    isSunlight ? 'bg-white border-slate-300' : 'bg-slate-800 border-slate-700 text-white'
+                                  }`}
+                                />
+                                <button
+                                  onClick={() => {
+                                    if (tempReplaceName.trim()) {
+                                      handleSubstituteActiveBatsman(b1.id, '', tempReplaceName.trim());
+                                      setTempReplaceName('');
+                                    }
+                                  }}
+                                  className="px-2.5 py-1 text-xs bg-indigo-600 text-white hover:bg-indigo-505 rounded-md font-bold"
+                                >
+                                  Swap
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div className="p-3 border-2 border-dashed border-rose-500 rounded-xl bg-rose-500/5 text-center text-rose-500 font-extrabold text-sm select-none py-4">
@@ -1552,37 +2325,103 @@ export default function App() {
 
                       {/* BATTER 2 CARD CARD */}
                       {b2 ? (
-                        <div 
-                          onClick={() => {
-                            triggerHapticFeedback();
-                            const innRef = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
-                            if (innRef) {
-                              innRef.strikerId = b2.id;
-                              setCurrentMatch({ ...currentMatch });
-                              triggerToast(`⭐️ ${b2.name} is on strike`);
-                            }
-                          }}
-                          className={`p-3 rounded-xl border-2 flex items-center justify-between cursor-pointer transition-all ${
-                            inn.strikerId === b2.id 
-                              ? 'bg-amber-400 border-amber-500 text-slate-950 scale-101 shadow-sm font-extrabold' 
-                              : 'border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-850'
-                          }`}
-                          id={`batsman-row-${b2.id}`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="text-xl">
-                              {inn.strikerId === b2.id ? '⭐️' : '🏏'}
-                            </span>
-                            <div>
-                              <p className="font-bold truncate text-base">{b2.name}</p>
-                              <span className="text-xs opacity-60">Striker click to change</span>
+                        <div className="space-y-2">
+                          <div 
+                            onClick={() => {
+                              triggerHapticFeedback();
+                              const innRef = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
+                              if (innRef) {
+                                innRef.strikerId = b2.id;
+                                setCurrentMatch({ ...currentMatch });
+                                triggerToast(`⭐️ ${b2.name} is on strike`);
+                              }
+                            }}
+                            className={`p-3 rounded-xl border-2 flex items-center justify-between cursor-pointer transition-all ${
+                              inn.strikerId === b2.id 
+                                ? 'bg-amber-400 border-amber-500 text-slate-950 scale-101 shadow-sm font-extrabold' 
+                                : 'border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-850'
+                            }`}
+                            id={`batsman-row-${b2.id}`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-xl">
+                                {inn.strikerId === b2.id ? '⭐️' : '🏏'}
+                              </span>
+                              <div>
+                                <p className="font-bold truncate text-base">{b2.name}</p>
+                                <span className="text-xs opacity-60">Striker click to change</span>
+                              </div>
+                            </div>
+                            
+                            <div className="text-right font-mono flex items-center gap-3">
+                              <div>
+                                <p className="text-xl font-bold">{b2.runs} <span className="text-xs font-normal">({b2.balls})</span></p>
+                                <p className="text-[10px] opacity-60">4s: {b2.fours} • 6s: {b2.sixes}</p>
+                              </div>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setReplacingBatterId(replacingBatterId === b2.id ? null : b2.id);
+                                }}
+                                className="p-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-755 text-indigo-600 rounded-lg text-xs font-extrabold flex items-center justify-center border dark:border-slate-700"
+                                title="Change or Substitute this batsman"
+                              >
+                                🔄
+                              </button>
                             </div>
                           </div>
-                          
-                          <div className="text-right font-mono">
-                            <p className="text-xl font-bold">{b2.runs} <span className="text-xs font-normal">({b2.balls})</span></p>
-                            <p className="text-[10px] opacity-60">4s: {b2.fours} • 6s: {b2.sixes}</p>
-                          </div>
+
+                          {/* Inline Substitution menu */}
+                          {replacingBatterId === b2.id && (
+                            <div className="p-3 bg-indigo-50/50 dark:bg-slate-850 border border-indigo-100 dark:border-slate-805 rounded-xl space-y-2 text-slate-900 dark:text-white" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs font-black text-indigo-600 block uppercase">Substitute {b2.name} with:</span>
+                                <button onClick={() => setReplacingBatterId(null)} className="text-[10px] font-bold text-slate-500 hover:underline">Close</button>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 max-h-[100px] overflow-y-auto">
+                                {inn.battingOrder
+                                  .filter(p => !p.out && p.id !== b2.id && p.id !== inn.currentBatter1Id)
+                                  .map(p => (
+                                    <button
+                                      key={p.id}
+                                      onClick={() => handleSubstituteActiveBatsman(b2.id, p.id)}
+                                      className="px-2 py-1 text-xs bg-white dark:bg-slate-800 hover:bg-indigo-100 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-md font-bold text-slate-800 dark:text-slate-100"
+                                    >
+                                      {p.name}
+                                    </button>
+                                  ))
+                                }
+                              </div>
+                              <div className="flex gap-1.5 pt-1">
+                                <input
+                                  type="text"
+                                  placeholder="Or type custom player name..."
+                                  value={tempReplaceName}
+                                  onChange={(e) => setTempReplaceName(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && tempReplaceName.trim()) {
+                                      handleSubstituteActiveBatsman(b2.id, '', tempReplaceName.trim());
+                                      setTempReplaceName('');
+                                    }
+                                  }}
+                                  className={`flex-1 px-2.5 py-1 text-xs rounded-md border focus:outline-none ${
+                                    isSunlight ? 'bg-white border-slate-300' : 'bg-slate-800 border-slate-700 text-white'
+                                  }`}
+                                />
+                                <button
+                                  onClick={() => {
+                                    if (tempReplaceName.trim()) {
+                                      handleSubstituteActiveBatsman(b2.id, '', tempReplaceName.trim());
+                                      setTempReplaceName('');
+                                    }
+                                  }}
+                                  className="px-2.5 py-1 text-xs bg-indigo-600 text-white hover:bg-indigo-505 rounded-md font-bold"
+                                >
+                                  Swap
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div className="p-3 border-2 border-dashed border-rose-500 rounded-xl bg-rose-500/5 text-center text-rose-500 font-extrabold text-sm select-none py-4">
@@ -1594,27 +2433,56 @@ export default function App() {
 
                     {/* SELECT INCOMING BATTER INTERNALLY */}
                     {hasNoBatsmanSlot && (
-                      <div className="pt-2 border-t border-dashed space-y-2 select-none">
-                        <span className="text-[10px] text-slate-400 uppercase block font-black">Choose replacement batsman:</span>
+                      <div className="pt-2 border-t border-dashed space-y-3 select-none">
+                        <span className="text-[10px] text-indigo-500 font-black uppercase tracking-wider block">Choose replacement batsman:</span>
+                        
                         <div className="flex flex-wrap gap-2 max-h-[140px] overflow-y-auto">
-                          {battingSquad.map((name, i) => {
-                            const bId = `p-${battingTeam}-${i + 1}`;
-                            const isOut = inn.battingOrder.some(p => p.id === bId && p.out);
-                            const inPlay = inn.currentBatter1Id === bId || inn.currentBatter2Id === bId;
+                          {inn.battingOrder.map((player) => {
+                            const isOut = player.out;
+                            const inPlay = inn.currentBatter1Id === player.id || inn.currentBatter2Id === player.id;
 
                             if (isOut || inPlay) return null;
 
                             return (
                               <button
-                                key={bId}
-                                onClick={() => handleAssignIncomingBatsman(i)}
-                                className="px-3 py-2 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded font-extrabold hover:bg-indigo-100 active:scale-95 transition-transform"
-                                id={`assign-batsman-${bId}`}
+                                key={player.id}
+                                onClick={() => handleAssignIncomingBatsmanById(player.id)}
+                                className="px-3 py-2 text-sm bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 rounded-xl font-extrabold active:scale-95 transition-transform flex items-center gap-1"
+                                id={`assign-batsman-${player.id}`}
                               >
-                                {name} ({i + 1})
+                                <span>🏏</span>
+                                <span>{player.name}</span>
                               </button>
                             );
                           })}
+                        </div>
+
+                        {/* Custom player addition right under selection */}
+                        <div className="flex items-center gap-2 pt-1.5 border-t border-slate-100 dark:border-slate-800">
+                          <input
+                            type="text"
+                            placeholder="Type new batsman name here..."
+                            value={customIncomingName}
+                            onChange={(e) => setCustomIncomingName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                handleAddCustomIncomingBatsman();
+                              }
+                            }}
+                            className={`flex-1 px-3 py-1.5 text-xs rounded-lg border focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
+                              isSunlight 
+                                ? 'bg-white border-slate-300 text-slate-900' 
+                                : 'bg-slate-800 border-slate-750 text-white'
+                            }`}
+                            id="custom-incoming-batsman-input"
+                          />
+                          <button
+                            onClick={handleAddCustomIncomingBatsman}
+                            disabled={!customIncomingName.trim()}
+                            className="px-3 py-1.5 text-xs bg-indigo-600 font-bold hover:bg-indigo-500 text-white rounded-lg active:scale-95 transition-transform disabled:opacity-50"
+                          >
+                            + Put in Play
+                          </button>
                         </div>
                       </div>
                     )}
@@ -1918,7 +2786,7 @@ export default function App() {
                       <span>🎯 Dismissal Method</span>
                     </h5>
                     <button 
-                      onClick={() => setWicketConfig({ showOptions: false, type: null, batsmanId: null })}
+                      onClick={() => setWicketConfig({ showOptions: false, type: null, batsmanId: null, incomingBatsmanId: null })}
                       className="p-1 px-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 font-extrabold text-xs rounded"
                     >
                       Cancel
@@ -1951,41 +2819,91 @@ export default function App() {
                     ))}
                   </div>
 
-                  {/* Pick which batsman got out */}
+                  {/* Pick which batsman got out & select incoming batsman */}
                   {currentMatch && (() => {
                     const inn = currentMatch.currentInningsIndex === 1 ? currentMatch.innings1 : currentMatch.innings2;
                     if (!inn) return null;
                     const b1 = inn.battingOrder.find(p => p.id === inn.currentBatter1Id);
                     const b2 = inn.battingOrder.find(p => p.id === inn.currentBatter2Id);
 
+                    const unusedPlayers = inn.battingOrder.filter(p => !p.out && p.id !== inn.currentBatter1Id && p.id !== inn.currentBatter2Id);
+
                     return (
-                      <div className="space-y-2">
-                        <label className="text-[10px] uppercase font-bold tracking-wider opacity-60">Which Batter is dismissed?</label>
-                        <div className="grid grid-cols-2 gap-4">
-                          {b1 && (
-                            <button
-                              onClick={() => setWicketConfig({ ...wicketConfig, batsmanId: b1.id })}
-                              className={`p-3 rounded-xl border text-center font-extrabold ${
-                                wicketConfig.batsmanId === b1.id
-                                  ? 'bg-red-500 text-white border-red-600 font-black'
-                                  : 'bg-white border-slate-300 dark:bg-slate-850 dark:border-slate-750'
-                              }`}
-                            >
-                              {b1.name} (Striker end)
-                            </button>
+                      <div className="space-y-4">
+                        {/* 1. Which Batter is dismissed */}
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] uppercase font-bold tracking-wider opacity-60 block">Which Batter is dismissed?</label>
+                          <div className="grid grid-cols-2 gap-4">
+                            {b1 && (
+                              <button
+                                onClick={() => setWicketConfig({ ...wicketConfig, batsmanId: b1.id })}
+                                className={`p-3 rounded-xl border text-center font-extrabold ${
+                                  wicketConfig.batsmanId === b1.id
+                                    ? 'bg-red-500 text-white border-red-650 font-black'
+                                    : 'bg-white border-slate-300 dark:bg-slate-850 dark:border-slate-750'
+                                }`}
+                              >
+                                {b1.name} (Striker end)
+                              </button>
+                            )}
+                            {b2 && (
+                              <button
+                                onClick={() => setWicketConfig({ ...wicketConfig, batsmanId: b2.id })}
+                                className={`p-3 rounded-xl border text-center font-extrabold ${
+                                  wicketConfig.batsmanId === b2.id
+                                    ? 'bg-red-500 text-white border-red-650 font-black'
+                                    : 'bg-white border-slate-300 dark:bg-slate-850 dark:border-slate-750'
+                                }`}
+                              >
+                                {b2.name} (Non-striker)
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 2. Choose next batsman */}
+                        <div className="space-y-2 border-t pt-3 border-dashed border-red-200/40">
+                          <label className="text-[10px] uppercase font-bold tracking-wider opacity-60 block">Who is the NEXT batsman (Incoming)? (Optional)</label>
+                          
+                          {unusedPlayers.length > 0 ? (
+                            <div className="flex flex-wrap gap-1.5 max-h-[110px] overflow-y-auto pb-1">
+                              {unusedPlayers.map(p => (
+                                <button
+                                  key={p.id}
+                                  onClick={() => setWicketConfig({ ...wicketConfig, incomingBatsmanId: p.id })}
+                                  className={`px-3 py-1.5 text-xs rounded-lg border font-bold transition-transform active:scale-95 ${
+                                    wicketConfig.incomingBatsmanId === p.id
+                                      ? 'bg-indigo-600 border-indigo-700 text-white font-black'
+                                      : 'bg-white border-slate-300 text-slate-800 dark:bg-slate-800 dark:border-slate-700 dark:text-white'
+                                  }`}
+                                >
+                                  {p.name}
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs italic text-rose-500 font-bold">No unused batsmen in squad. Team is all out or empty.</p>
                           )}
-                          {b2 && (
-                            <button
-                              onClick={() => setWicketConfig({ ...wicketConfig, batsmanId: b2.id })}
-                              className={`p-3 rounded-xl border text-center font-extrabold ${
-                                wicketConfig.batsmanId === b2.id
-                                  ? 'bg-red-500 text-white border-red-600 font-black'
-                                  : 'bg-white border-slate-300 dark:bg-slate-850 dark:border-slate-750'
+
+                          {/* Option to type custom batsman name on the fly */}
+                          <div className="flex items-center gap-2 pt-1 border-t border-red-150/10">
+                            <input
+                              type="text"
+                              placeholder="Or write a brand new batsman name..."
+                              value={customWicketIncomingName}
+                              onChange={(e) => setCustomWicketIncomingName(e.target.value)}
+                              className={`flex-1 px-3 py-1.5 text-xs rounded-lg border focus:outline-none focus:ring-1 focus:ring-red-400 ${
+                                isSunlight 
+                                  ? 'bg-white border-slate-300 text-slate-900' 
+                                  : 'bg-slate-805 border-slate-700 text-white'
                               }`}
-                            >
-                              {b2.name} (Non-striker)
-                            </button>
-                          )}
+                            />
+                            {customWicketIncomingName.trim() && (
+                              <span className="text-[10px] uppercase bg-green-500 text-white font-black px-1.5 py-0.5 rounded animate-pulse">
+                                NEW PLAYER
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     );
