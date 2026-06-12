@@ -26,23 +26,23 @@ service cloud.firestore {
 
     // Match validation helper
     function isValidMatch(data) {
-      return data.id is string
-        && data.id.size() <= 128
-        && data.matchName is string
-        && data.matchName.size() <= 200
-        && data.teamAName is string
-        && data.teamAName.size() <= 100
-        && data.teamBName is string
-        && data.teamBName.size() <= 100
-        && data.overs is int
-        && data.overs >= 1
-        && data.overs <= 100
-        && data.playersPerTeam is int
-        && data.playersPerTeam >= 1
-        && data.playersPerTeam <= 30
-        && data.status is string
-        && (data.status == 'created' || data.status == 'toss' || data.status == 'scoring' || data.status == 'completed')
-        && (data.creatorId == null || data.creatorId is string);
+      return data.get('id', '') is string
+        && data.get('id', '').size() <= 128
+        && data.get('matchName', '') is string
+        && data.get('matchName', '').size() <= 200
+        && data.get('teamAName', '') is string
+        && data.get('teamAName', '').size() <= 100
+        && data.get('teamBName', '') is string
+        && data.get('teamBName', '').size() <= 100
+        && data.get('overs', 1) is int
+        && data.get('overs', 1) >= 1
+        && data.get('overs', 1) <= 100
+        && data.get('playersPerTeam', 11) is int
+        && data.get('playersPerTeam', 11) >= 1
+        && data.get('playersPerTeam', 11) <= 30
+        && data.get('status', '') is string
+        && (data.get('status', '') == 'created' || data.get('status', '') == 'toss' || data.get('status', '') == 'scoring' || data.get('status', '') == 'completed')
+        && (data.get('creatorId', null) == null || data.get('creatorId', null) is string);
     }
 
     // Strict Matches rules
@@ -59,7 +59,7 @@ service cloud.firestore {
         && isValidMatch(incoming())
         && (
           // Protect finished matches: once status is completed, you cannot update unless correcting back
-          existing().status != 'completed' || incoming().status == 'completed'
+          existing().get('status', '') != 'completed' || incoming().get('status', '') == 'completed'
         );
 
       // Anyone can delete a match scorecard
